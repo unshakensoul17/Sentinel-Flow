@@ -74,8 +74,16 @@ export class InspectorService {
                 data.coupling = health.coupling;
                 data.functionCount = data.functionCount ?? health.symbolCount;
             } else if (nodeType === 'file') {
-                // Remove potential domain prefix if present for lookup
-                let filePath = this.resolvePath(nodeId.startsWith('domain:') ? nodeId.substring(7) : nodeId);
+                // Remove potential domain prefix if present for lookup (e.g. "Domain:/abs/path.ts" -> "/abs/path.ts")
+                let rawFilePath = nodeId;
+                const colonIdx = nodeId.indexOf(':');
+                if (colonIdx > 0) {
+                    const afterColon = nodeId.substring(colonIdx + 1);
+                    if (afterColon.startsWith('/') || /^[a-zA-Z]:/.test(afterColon)) {
+                        rawFilePath = afterColon;
+                    }
+                }
+                let filePath = this.resolvePath(rawFilePath);
 
                 data.name = filePath.split('/').pop() || filePath;
                 data.path = filePath;
@@ -189,7 +197,15 @@ export class InspectorService {
                     }
                 }
             } else if (nodeType === 'file') {
-                let filePath = this.resolvePath(nodeId.startsWith('domain:') ? nodeId.substring(7) : nodeId);
+                let rawFilePath = nodeId;
+                const colonIdx = nodeId.indexOf(':');
+                if (colonIdx > 0) {
+                    const afterColon = nodeId.substring(colonIdx + 1);
+                    if (afterColon.startsWith('/') || /^[a-zA-Z]:/.test(afterColon)) {
+                        rawFilePath = afterColon;
+                    }
+                }
+                let filePath = this.resolvePath(rawFilePath);
 
                 // Get all symbols in this file
                 const symbols = this.db.getSymbolsByFile(filePath);
@@ -331,10 +347,15 @@ export class InspectorService {
 
                 // P1-C: File risk — based on avg complexity + coupling of symbols in file
             } else if (nodeType === 'file') {
-                let filePath = this.resolvePath(nodeId.startsWith('domain:') ? nodeId.substring(7) : nodeId);
-                // Strip leading domain prefix if format is "domain:path"
-                const colonIdx = filePath.indexOf(':');
-                if (colonIdx > 0 && !filePath.includes('/')) filePath = filePath.substring(colonIdx + 1);
+                let rawFilePath = nodeId;
+                const colonIdx = nodeId.indexOf(':');
+                if (colonIdx > 0) {
+                    const afterColon = nodeId.substring(colonIdx + 1);
+                    if (afterColon.startsWith('/') || /^[a-zA-Z]:/.test(afterColon)) {
+                        rawFilePath = afterColon;
+                    }
+                }
+                let filePath = this.resolvePath(rawFilePath);
 
                 const fileSymbols = this.db.getSymbolsByFile(filePath);
 

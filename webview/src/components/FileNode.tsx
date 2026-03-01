@@ -41,7 +41,7 @@ const FileNode = memo(({ data, style }: NodeProps<Node<FileNodeData>> & { style?
     const borderColor = getBorderColor();
 
     // Calculate styling
-    const containerOpacity = isDimmed ? 0.3 : 1;
+    const containerOpacity = isDimmed ? 0.55 : 1;
     const borderWidth = isActive ? 5 : 3; // Thicker border
 
     // Zoom-based details class (handled by parent container class in CSS usually, but here we can use conditional rendering if needed)

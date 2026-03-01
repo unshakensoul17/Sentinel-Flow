@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 export class SidebarProvider implements vscode.WebviewViewProvider {
     _view?: vscode.WebviewView;
 
-    constructor(private readonly _extensionUri: vscode.Uri) { }
+    constructor(private readonly _extensionUri: vscode.Uri, private readonly _context: vscode.ExtensionContext) { }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
@@ -37,12 +37,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     vscode.commands.executeCommand('codeIndexer.configureAI');
                     break;
                 }
+                case 'toggle-auto-index': {
+                    this._context.workspaceState.update('autoIndexEnabled', data.value);
+                    if (data.value) {
+                        vscode.window.showInformationMessage('Sentinel Flow: Auto-Indexing Enabled');
+                    } else {
+                        vscode.window.showInformationMessage('Sentinel Flow: Auto-Indexing Disabled');
+                    }
+                    break;
+                }
             }
         });
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
         const nonce = getNonce();
+        const autoIndexEnabled = this._context.workspaceState.get<boolean>('autoIndexEnabled', true);
 
         // Use VS Code's native CSS variables for a consistent look
         return `<!DOCTYPE html>
@@ -157,6 +167,69 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                         text-align: center;
                         opacity: 0.8;
                     }
+
+                    /* Toggle Switch CSS */
+                    .toggle-container {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        padding: 8px 12px;
+                        background-color: var(--vscode-button-secondaryBackground);
+                        border-radius: 4px;
+                    }
+                    .toggle-label {
+                        font-size: 12px;
+                        color: var(--vscode-foreground);
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                    }
+                    .switch {
+                        position: relative;
+                        display: inline-block;
+                        width: 32px;
+                        height: 18px;
+                    }
+                    .switch input { 
+                        opacity: 0;
+                        width: 0;
+                        height: 0;
+                    }
+                    .slider {
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: var(--vscode-input-background);
+                        border: 1px solid var(--vscode-widget-border);
+                        transition: .2s;
+                    }
+                    .slider:before {
+                        position: absolute;
+                        content: "";
+                        height: 12px;
+                        width: 12px;
+                        left: 2px;
+                        bottom: 2px;
+                        background-color: var(--vscode-foreground);
+                        transition: .2s;
+                    }
+                    input:checked + .slider {
+                        background-color: var(--vscode-button-background);
+                        border-color: var(--vscode-button-background);
+                    }
+                    input:checked + .slider:before {
+                        transform: translateX(14px);
+                        background-color: var(--vscode-button-foreground);
+                    }
+                    .slider.round {
+                        border-radius: 18px;
+                    }
+                    .slider.round:before {
+                        border-radius: 50%;
+                    }
                 </style>
 			</head>
 			<body>
@@ -176,6 +249,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 </div>
 
                 <div class="card" style="gap: 8px;">
+                    <div class="toggle-container">
+                        <div class="toggle-label">
+                            <span style="font-size: 14px;">⚡</span> Auto-Index Workspace
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-auto-index" ${autoIndexEnabled ? 'checked' : ''}>
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+
+                    <div class="divider"></div>
+
                     <button id="btn-update-index" class="secondary-button">
                         <span style="font-size: 14px;">🔄</span> Update Workspace Index
                     </button>
@@ -229,6 +314,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                     
                     document.getElementById('btn-reset-index').addEventListener('click', () => {
                         vscode.postMessage({ type: 'reset-index' });
+                    });
+                    
+                    document.getElementById('toggle-auto-index').addEventListener('change', (e) => {
+                        vscode.postMessage({ type: 'toggle-auto-index', value: e.target.checked });
                     });
                 </script>
 			</body>

@@ -61,10 +61,9 @@ const InspectorPanel = memo(({ vscode, onClose, onFocusNode }: InspectorPanelPro
             return;
         }
 
-        // Skip if same node as already fetched (quick re-render guard)
-        if (fetchedIdRef.current === selectedId) {
-            return;
-        }
+        // Reset fetchedId so re-clicking the same node always triggers a fresh fetch.
+        // The generation counter below guards against true duplicate in-flight requests.
+        fetchedIdRef.current = null;
 
         // Increment generation — any in-flight callbacks from previous
         // selections will see a stale generation and discard their results

@@ -49,7 +49,7 @@ const SymbolNode = memo(({ data, style }: NodeProps<Node<SymbolNodeData>> & { st
     };
 
     // Calculate styling
-    const containerOpacity = isDimmed ? 0.3 : 1;
+    const containerOpacity = isDimmed ? 0.55 : 1;
     const borderWidth = isActive || isHighlighted ? 2 : 1;
 
     // Use coupling color for border, but normalized to health colors if possible?

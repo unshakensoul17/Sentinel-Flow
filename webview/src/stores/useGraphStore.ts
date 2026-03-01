@@ -36,11 +36,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     collapsedNodes: new Set<string>(),
 
     setGraphData: (data) => {
-        // By default, collapse all domain nodes to provide a high-level view
+        const currentMode = get().viewMode;
+        // In codebase mode, start fully expanded so files and symbols are visible.
+        // In other modes, collapse domains by default for a high-level view.
         const initialCollapsed = new Set<string>();
-        data.domains.forEach(d => {
-            initialCollapsed.add(`domain:${d.domain}`);
-        });
+        if (currentMode !== 'codebase') {
+            (data.domains ?? []).forEach(d => {
+                initialCollapsed.add(`domain:${d.domain}`);
+            });
+        }
 
         set({
             originalGraphData: data,
@@ -53,7 +57,22 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
     setArchitectureSkeleton: (data) => set({ architectureSkeleton: data }),
     setFunctionTrace: (data) => set({ functionTrace: data }),
-    setViewMode: (mode) => set({ viewMode: mode }),
+    setViewMode: (mode) => {
+        if (mode === 'codebase') {
+            // In codebase mode, expand all nodes so files and symbols are visible by default.
+            set({ viewMode: mode, collapsedNodes: new Set<string>() });
+        } else if (mode === 'architecture') {
+            // In architecture mode, re-collapse all domains for the high-level view.
+            const { displayedGraphData } = get();
+            const collapsed = new Set<string>();
+            (displayedGraphData?.domains ?? []).forEach(d => {
+                collapsed.add(`domain:${d.domain}`);
+            });
+            set({ viewMode: mode, collapsedNodes: collapsed });
+        } else {
+            set({ viewMode: mode });
+        }
+    },
 
     filterByDirectory: (targetPath: string) => {
         const { originalGraphData } = get();
@@ -175,9 +194,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
         const allCollapsed = new Set<string>();
         // Collapse Domains
-        displayedGraphData.domains.forEach(d => allCollapsed.add(`domain:${d.domain}`));
+        (displayedGraphData.domains ?? []).forEach(d => allCollapsed.add(`domain:${d.domain}`));
         // Collapse Files (optional, but good for consistency)
-        displayedGraphData.files.forEach(f => {
+        (displayedGraphData.files ?? []).forEach(f => {
             const domain = displayedGraphData.symbols.find(s => s.filePath === f.filePath)?.domain || 'unknown';
             allCollapsed.add(`${domain}:${f.filePath}`);
         });

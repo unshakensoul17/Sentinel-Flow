@@ -69,7 +69,7 @@ export async function activate(context: vscode.ExtensionContext) {
         outputChannel.appendLine('CodeLens providers registered');
 
         // Initialize Sidebar Provider
-        const sidebarProvider = new SidebarProvider(context.extensionUri);
+        const sidebarProvider = new SidebarProvider(context.extensionUri, context);
         context.subscriptions.push(
             vscode.window.registerWebviewViewProvider(
                 'sentinel-flow-sidebar',
@@ -85,6 +85,51 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.workspace.onDidChangeConfiguration(async (e) => {
                 if (e.affectsConfiguration('sentinelFlow')) {
                     await updateWorkerConfig();
+                }
+            })
+        );
+
+        // Auto-index on first activation for this workspace
+        const hasIndexedWorkspace = context.workspaceState.get<boolean>('hasIndexedWorkspace', false);
+        if (!hasIndexedWorkspace) {
+            outputChannel.appendLine('First time activation in this workspace detected.');
+            // Give VS Code a moment to finish initializing
+            setTimeout(() => {
+                const autoIndexEnabled = context.workspaceState.get<boolean>('autoIndexEnabled', true);
+                if (autoIndexEnabled) {
+                    outputChannel.appendLine('Starting auto-index...');
+                    vscode.commands.executeCommand('codeIndexer.indexWorkspace').then(() => {
+                        context.workspaceState.update('hasIndexedWorkspace', true);
+                    });
+                } else {
+                    outputChannel.appendLine('Auto-indexing is disabled, skipping initial index.');
+                    context.workspaceState.update('hasIndexedWorkspace', true);
+                }
+            }, 7000);
+        }
+
+        // Listen for workspace folder changes
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeWorkspaceFolders(async (e) => {
+                if (e.added.length > 0 || e.removed.length > 0) {
+                    const autoIndexEnabled = context.workspaceState.get<boolean>('autoIndexEnabled', true);
+                    if (!autoIndexEnabled) {
+                        outputChannel.appendLine('Workspace folders changed, but auto-indexing is disabled. Skipping re-index.');
+                        return;
+                    }
+
+                    outputChannel.appendLine('Workspace folders changed. Re-indexing...');
+                    if (workerManager) {
+                        try {
+                            // Silently clear index
+                            await workerManager.clearIndex();
+                            outputChannel.appendLine('Previous index cleared successfully.');
+                            // Trigger re-index
+                            await vscode.commands.executeCommand('codeIndexer.indexWorkspace');
+                        } catch (error) {
+                            outputChannel.appendLine(`Failed to auto-reindex after folder change: ${error}`);
+                        }
+                    }
                 }
             })
         );

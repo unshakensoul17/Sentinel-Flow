@@ -95,7 +95,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
             if (graphData.domains) {
                 graphData.domains.forEach(d => domains.add(d.domain));
             }
-            graphData.symbols.forEach(s => {
+            (graphData.symbols ?? []).forEach(s => {
                 if (s.domain) domains.add(s.domain);
             });
         } else if (architectureSkeleton) {
@@ -137,15 +137,13 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
     // BFS Tree Depth control (0: Domain, 1: File, 2: Symbol)
     const [maxDepth, setMaxDepth] = useState(1);
 
-    // Auto-expand domains when entering codebase mode so files are visible by default
+    // Safety net: ensure codebase mode always starts expanded
+    // (store's setViewMode clears collapsedNodes, but this catches edge cases like state restore)
     useEffect(() => {
         if (currentMode === 'codebase') {
             expandAll();
-        } else if (currentMode === 'architecture') {
-            // Re-collapse when going back to architecture
-            collapseAll();
         }
-    }, [currentMode, expandAll, collapseAll]);
+    }, [currentMode, expandAll]);
 
     // Build all nodes and edges from graph data (only when data changes)
     useEffect(() => {
@@ -337,8 +335,8 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
 
                 // Domain filtering
                 const filteredSymbols = selectedDomain === 'All'
-                    ? graphData.symbols
-                    : graphData.symbols.filter(s => (s.domain || 'unknown') === selectedDomain);
+                    ? (graphData.symbols ?? [])
+                    : (graphData.symbols ?? []).filter(s => (s.domain || 'unknown') === selectedDomain);
 
                 // Group by domain → file → symbols
                 const domainFileMap = new Map<string, Map<string, typeof graphData.symbols>>();
@@ -464,7 +462,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
                 const visibleNodeIds = new Set(codebaseNodes.map(n => n.id));
                 const nodeRedirection = new Map<string, string>();
 
-                graphData.symbols.forEach(sym => {
+                (graphData.symbols ?? []).forEach(sym => {
                     const symbolId = `${sym.filePath}:${sym.name}:${sym.range.startLine}`;
                     const domainId = `domain:${sym.domain || 'unknown'}`;
                     const fileId = `${sym.domain || 'unknown'}:${sym.filePath}`;
@@ -477,7 +475,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
                 });
 
                 const uniqueEdgeKeys = new Set<string>();
-                graphData.edges.forEach((edge, index) => {
+                (graphData.edges ?? []).forEach((edge, index) => {
                     let source = edge.source;
                     let target = edge.target;
 
@@ -559,7 +557,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
             const metrics = calculateCouplingMetrics(graphData);
 
             // Create domain nodes (top level)
-            const domainNodes: Node[] = graphData.domains.map((domainData) => {
+            const domainNodes: Node[] = (graphData.domains ?? []).map((domainData) => {
                 const nodeId = `domain:${domainData.domain}`;
                 const isCollapsed = collapsedNodes.has(nodeId);
 
@@ -578,7 +576,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
 
             // Group symbols by domain and file
             const symbolsByDomain = new Map<string, Map<string, typeof graphData.symbols>>();
-            graphData.symbols.forEach((symbol) => {
+            (graphData.symbols ?? []).forEach((symbol) => {
                 const domain = symbol.domain || 'unknown';
                 if (!symbolsByDomain.has(domain)) {
                     symbolsByDomain.set(domain, new Map());
@@ -672,7 +670,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
             ]);
 
             const nodeRedirection = new Map<string, string>();
-            graphData.symbols.forEach(symbol => {
+            (graphData.symbols ?? []).forEach(symbol => {
                 const symbolId = `${symbol.filePath}:${symbol.name}:${symbol.range.startLine}`;
                 const domainId = `domain:${symbol.domain || 'unknown'}`;
                 const fileId = `${symbol.domain || 'unknown'}:${symbol.filePath}`;
@@ -687,7 +685,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
             const processedEdges: Edge[] = [];
             const uniqueEdges = new Set<string>();
 
-            graphData.edges.forEach((edge, index) => {
+            (graphData.edges ?? []).forEach((edge, index) => {
                 let source = edge.source;
                 let target = edge.target;
 
@@ -1036,7 +1034,14 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
         const clientY = event.clientY;
         const nodeData = node.data as any;
 
-        // Add 150ms delay before triggering highlight/tooltip to prevent flickering during mouse movement
+        // Determine hover delay based on node type and view mode
+        // Domains in architecture/codebase mode get a longer delay to prevent unintentional highlighting when panning/sliding
+        let delay = 150;
+        if (node.type === 'domainNode' && (currentMode === 'architecture' || currentMode === 'codebase')) {
+            delay = 600;
+        }
+
+        // Add delay before triggering highlight/tooltip to prevent flickering during mouse movement
         hoverTimer.current = setTimeout(() => {
             setHoveredNodeId(node.id);
 
@@ -1061,8 +1066,8 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
                     type: node.type || 'node'
                 });
             }
-        }, 150);
-    }, []);
+        }, delay);
+    }, [currentMode]);
 
     const handleNodeMouseLeave = useCallback(() => {
         // Immediate clear on leave for responsiveness
@@ -1469,12 +1474,12 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
                 
                 /* Hover Dimming Logic */
                 .graph-wrapper.has-highlight .react-flow__node:not(.highlighted) {
-                    opacity: 0.2;
+                    opacity: 0.55;
                     transition: opacity 0.2s ease;
                 }
                 
                 .graph-wrapper.has-highlight .react-flow__edge:not(.highlighted) {
-                    opacity: 0.1;
+                    opacity: 0.35;
                     transition: opacity 0.2s ease;
                 }
                 

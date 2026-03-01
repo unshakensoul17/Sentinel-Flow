@@ -130,28 +130,43 @@ function App() {
         }
     }, [viewMode, originalGraphData, isRefreshing, isTimeout, errorMessage]);
 
-    // Determine node type from node ID pattern
+    // Determine node type from node ID and current state
     const getNodeType = useCallback((nodeId: string): NodeType => {
         if (nodeId.startsWith('domain:')) {
             return 'domain';
         }
-        // File nodes have format: domain:filePath (no symbol/line at end)
+
+        // Accurately resolve folder vs file in Architecture mode
+        if (viewMode === 'architecture' && architectureSkeleton) {
+            let foundFolder = false;
+            let foundFile = false;
+            const traverse = (nodes: any[]) => {
+                for (const node of nodes) {
+                    if (node.id === nodeId) {
+                        if (node.isFolder) foundFolder = true;
+                        else foundFile = true;
+                        return;
+                    }
+                    if (node.children) traverse(node.children);
+                }
+            };
+            traverse(architectureSkeleton.nodes);
+
+            if (foundFolder) return 'domain';
+            if (foundFile) return 'file';
+        }
+
+        // File nodes in codebase have format: domain:filePath (no symbol/line at end)
         // Symbol nodes have format: filePath:symbolName:line
         const parts = nodeId.split(':');
         if (parts.length >= 3 && /^\d+$/.test(parts[parts.length - 1])) {
             return 'symbol';
         }
         return 'file';
-    }, []);
+    }, [viewMode, architectureSkeleton]);
 
     const handleNodeClick = useCallback(
         (nodeId: string) => {
-            // Prevent duplicate updates for same node
-            if (lastClickedNodeRef.current === nodeId) {
-                return;
-            }
-            lastClickedNodeRef.current = nodeId;
-
             // Determine node type and update inspector store
             const nodeType = getNodeType(nodeId);
             selectNode(nodeId, nodeType);
@@ -160,10 +175,6 @@ function App() {
             setShowInspector(true);
 
             // Notify extension
-            const message: WebviewMessage = {
-                type: 'node-selected-webview',
-                nodeId,
-            } as any; // Using 'any' briefly to bypass type check if needed, but optimally update types.ts
             vscode.postMessage({ type: 'node-selected', nodeId });
         },
         [selectNode, getNodeType]
