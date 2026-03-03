@@ -224,6 +224,38 @@ export class WorkerManager {
     }
 
     /**
+     * Check multiple file hashes in batch
+     */
+    async checkFileHashBatch(files: { filePath: string; contentHash: string }[]): Promise<string[]> {
+        const response = await this.sendRequest({
+            type: 'check-file-hash-batch',
+            id: this.generateId(),
+            files,
+        });
+
+        if (response.type !== 'file-hash-batch-result') {
+            throw new Error('Unexpected response type');
+        }
+
+        return response.pathsNeedingReindex;
+    }
+
+    /**
+     * Delete symbols for a file
+     */
+    async deleteFileSymbols(filePath: string): Promise<void> {
+        const response = await this.sendRequest({
+            type: 'delete-file-symbols',
+            id: this.generateId(),
+            filePath,
+        });
+
+        if (response.type !== 'delete-file-symbols-complete') {
+            throw new Error('Unexpected response type');
+        }
+    }
+
+    /**
      * Export entire graph as JSON
      */
     async exportGraph(): Promise<GraphExport> {

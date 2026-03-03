@@ -42,6 +42,18 @@ export type WorkerRequest =
         content: string;
     }
     | {
+        // Batch version: send all hashes in one round-trip, get back only paths that changed
+        type: 'check-file-hash-batch';
+        id: string;
+        files: { filePath: string; contentHash: string }[];
+    }
+    | {
+        // Delete all symbols for a file (used when file-watcher detects deletion)
+        type: 'delete-file-symbols';
+        id: string;
+        filePath: string;
+    }
+    | {
         type: 'export-graph';
         id: string;
     }
@@ -203,6 +215,16 @@ export type WorkerResponse =
         needsReindex: boolean;
         storedHash: string | null;
         currentHash: string;
+    }
+    | {
+        // Returns only the file paths that need reindexing
+        type: 'file-hash-batch-result';
+        id: string;
+        pathsNeedingReindex: string[];
+    }
+    | {
+        type: 'delete-file-symbols-complete';
+        id: string;
     }
     | {
         type: 'graph-export';

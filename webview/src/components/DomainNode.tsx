@@ -14,7 +14,8 @@ export interface DomainNodeData extends Record<string, unknown> {
         totalBlastRadius?: number;
     };
     collapsed: boolean;
-    onToggleCollapse?: () => void;
+    nodeId: string;
+    onToggleCollapse?: (id: string) => void;
     // Progressive visibility states
     isDimmed?: boolean;
     isActive?: boolean;
@@ -27,6 +28,7 @@ const DomainNode = memo(({ data, style }: NodeProps<Node<DomainNodeData>> & { st
         domain,
         health,
         collapsed,
+        nodeId,
         onToggleCollapse,
         isDimmed = false,
         isActive = false,
@@ -109,7 +111,7 @@ const DomainNode = memo(({ data, style }: NodeProps<Node<DomainNodeData>> & { st
                     onClick={(e) => {
                         e.stopPropagation();
                         if (typeof onToggleCollapse === 'function') {
-                            onToggleCollapse();
+                            onToggleCollapse(nodeId);
                         }
                     }}
                     className="cursor-pointer opacity-60 hover:opacity-100 px-1"

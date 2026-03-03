@@ -5,6 +5,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { WorkerManager } from './worker/worker-manager';
 import { FileWatcherManager } from './file-watcher';
 import { GraphWebviewProvider } from './webview-provider';
@@ -195,6 +196,12 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('sentinel-flow.invalidate-cache', () => {
+            graphWebviewProvider?.postMessage({ type: 'cache-invalidate' });
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('codeIndexer.configureAI', async () => {
             await configureAI();
         })
@@ -243,20 +250,17 @@ export async function deactivate() {
  */
 async function indexWorkspace() {
     if (!workerManager) {
-        vscode.window.showErrorMessage('Worker not initialized');
+        vscode.window.showErrorMessage('Sentinel Flow: Worker not initialized');
         return;
     }
 
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders) {
-        vscode.window.showWarningMessage('No workspace folder open');
-        return;
-    }
+    if (!workspaceFolders) return;
 
     await vscode.window.withProgress(
         {
             location: vscode.ProgressLocation.Notification,
-            title: 'Indexing workspace...',
+            title: 'Sentinel Flow: Indexing Workspace',
             cancellable: false,
         },
         async (progress) => {
@@ -267,72 +271,72 @@ async function indexWorkspace() {
                     '{**/node_modules/**,**/venv/**,**/.venv/**,**/.git/**,**/dist/**,**/build/**,**/out/**,**/.cache/**,**/.vscode/**,**/__pycache__/**,**/.pytest_cache/**}'
                 );
 
-                // Prepare files for batch processing
-                const filesToParse: {
-                    filePath: string;
-                    content: string;
-                    language: 'typescript' | 'python' | 'c'
-                }[] = [];
+                const totalFiles = files.length;
+                let processedCount = 0;
+                let totalSymbols = 0;
+                let totalEdges = 0;
+                const BATCH_SIZE = 100; // Small batch size for interleaved UI responsiveness
 
-                let skipped = 0;
+                outputChannel.appendLine(`Starting chunked index of ${totalFiles} files...`);
 
-                for (const file of files) {
+                for (let i = 0; i < totalFiles; i += BATCH_SIZE) {
+                    const chunk = files.slice(i, i + BATCH_SIZE);
                     progress.report({
-                        message: `Reading ${path.basename(file.fsPath)}...`,
+                        message: `Processing ${processedCount}/${totalFiles} files...`,
+                        increment: (chunk.length / totalFiles) * 100
                     });
 
-                    try {
-                        const document = await vscode.workspace.openTextDocument(file);
-                        const content = document.getText();
-                        const language = getLanguage(file.fsPath);
-
-                        if (language) {
-                            // Check if file needs re-indexing
-                            const needsReindex = await workerManager!.checkFileHash(
-                                file.fsPath,
-                                content
-                            );
-
-                            if (needsReindex) {
-                                filesToParse.push({
-                                    filePath: file.fsPath,
-                                    content,
-                                    language,
-                                });
-                            } else {
-                                skipped++;
+                    // Step 1: Read chunk metadata in parallel
+                    const chunkMetadata = await Promise.all(
+                        chunk.map(async (file) => {
+                            try {
+                                if (!fs.existsSync(file.fsPath)) return null;
+                                const content = await fs.promises.readFile(file.fsPath, 'utf8');
+                                const language = getLanguage(file.fsPath);
+                                if (!language) return null;
+                                const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+                                return { filePath: file.fsPath, content, language, contentHash };
+                            } catch (e) {
+                                return null;
                             }
-                        }
-                    } catch (error) {
-                        outputChannel.appendLine(`Error reading ${file.fsPath}: ${error}`);
-                    }
-                }
-
-                if (filesToParse.length === 0) {
-                    vscode.window.showInformationMessage(
-                        `All ${skipped} files are up to date. No indexing needed.`
+                        })
                     );
-                    return;
+
+                    const validFiles = chunkMetadata.filter((f): f is NonNullable<typeof f> => f !== null);
+                    if (validFiles.length === 0) {
+                        processedCount += chunk.length;
+                        continue;
+                    }
+
+                    // Step 2: Batch check which files in THIS chunk need re-indexing
+                    const pathsNeedingReindex = await workerManager!.checkFileHashBatch(
+                        validFiles.map(f => ({ filePath: f.filePath, contentHash: f.contentHash }))
+                    );
+
+                    const reindexMap = new Set(pathsNeedingReindex);
+                    const filesToParse = validFiles.filter(f => reindexMap.has(f.filePath));
+
+                    if (filesToParse.length > 0) {
+                        // Step 3: Parse this chunk's mutated files
+                        const result = await workerManager!.parseBatch(filesToParse);
+                        totalSymbols += result.totalSymbols;
+                        totalEdges += result.totalEdges;
+                    }
+
+                    processedCount += chunk.length;
                 }
 
-                progress.report({
-                    message: `Indexing ${filesToParse.length} files...`,
-                });
-
-                // Use batch parsing for better cross-file edge resolution
-                const result = await workerManager!.parseBatch(filesToParse);
+                // Finalize: signal webview to refresh caches
+                graphWebviewProvider?.postMessage({ type: 'cache-invalidate' });
 
                 vscode.window.showInformationMessage(
-                    `Indexed ${result.filesProcessed} files with ${result.totalSymbols} symbols and ${result.totalEdges} edges` +
-                    (skipped > 0 ? ` (${skipped} unchanged files skipped)` : '')
+                    `Indexing complete. Processed ${totalFiles} files, found ${totalSymbols} symbols and ${totalEdges} edges.`
                 );
 
-                outputChannel.appendLine(
-                    `Indexing complete: ${result.filesProcessed} files, ${result.totalSymbols} symbols, ${result.totalEdges} edges`
-                );
+                outputChannel.appendLine(`Indexing finished: ${totalSymbols} symbols, ${totalEdges} edges.`);
             } catch (error) {
                 vscode.window.showErrorMessage(`Indexing failed: ${error}`);
-                outputChannel.appendLine(`Indexing failed: ${error}`);
+                outputChannel.appendLine(`Indexing error: ${error}`);
             }
         }
     );

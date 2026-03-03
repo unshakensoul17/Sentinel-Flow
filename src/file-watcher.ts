@@ -4,6 +4,8 @@
 
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import * as path from 'path';
+import * as fs from 'fs';
 import { WorkerManager } from './worker/worker-manager';
 
 export class FileWatcherManager {
@@ -11,8 +13,9 @@ export class FileWatcherManager {
     private workerManager: WorkerManager;
     private outputChannel: vscode.OutputChannel;
     private isEnabled: boolean = false;
-    private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
-    private readonly DEBOUNCE_MS = 500;
+    private pendingFiles: Set<string> = new Set();
+    private batchTimer: NodeJS.Timeout | null = null;
+    private readonly BATCH_MS = 1000;
 
     constructor(workerManager: WorkerManager, outputChannel: vscode.OutputChannel) {
         this.workerManager = workerManager;
@@ -35,23 +38,17 @@ export class FileWatcherManager {
             false  // Don't ignore deletes
         );
 
-        // Handle file changes
-        this.watcher.onDidChange(async (uri) => {
-            this.debounceReindex(uri);
-        });
+        // Handle file changes & creations using batching
+        this.watcher.onDidChange((uri) => this.enqueueFile(uri));
+        this.watcher.onDidCreate((uri) => this.enqueueFile(uri));
 
-        // Handle new files
-        this.watcher.onDidCreate(async (uri) => {
-            this.debounceReindex(uri);
-        });
-
-        // Handle deleted files
+        // Handle deleted files immediately (still safe but less common to batch deletes)
         this.watcher.onDidDelete(async (uri) => {
             await this.handleFileDelete(uri);
         });
 
         this.isEnabled = true;
-        this.outputChannel.appendLine('File watcher started');
+        this.outputChannel.appendLine('File watcher started (Batch mode enabled)');
     }
 
     /**
@@ -63,75 +60,75 @@ export class FileWatcherManager {
             this.watcher = null;
         }
 
-        // Clear any pending debounce timers
-        for (const timer of this.debounceTimers.values()) {
-            clearTimeout(timer);
+        if (this.batchTimer) {
+            clearTimeout(this.batchTimer);
+            this.batchTimer = null;
         }
-        this.debounceTimers.clear();
+        this.pendingFiles.clear();
 
         this.isEnabled = false;
         this.outputChannel.appendLine('File watcher stopped');
     }
 
     /**
-     * Debounce file change events to avoid rapid re-indexing
+     * Enqueue a file for batch re-indexing
      */
-    private debounceReindex(uri: vscode.Uri): void {
+    private enqueueFile(uri: vscode.Uri): void {
         const filePath = uri.fsPath;
+        if (this.shouldSkipFile(filePath)) return;
 
-        // Clear existing timer for this file
-        const existingTimer = this.debounceTimers.get(filePath);
-        if (existingTimer) {
-            clearTimeout(existingTimer);
+        this.pendingFiles.add(filePath);
+
+        if (this.batchTimer) {
+            clearTimeout(this.batchTimer);
         }
 
-        // Set new debounced timer
-        const timer = setTimeout(async () => {
-            this.debounceTimers.delete(filePath);
-            await this.handleFileChange(uri);
-        }, this.DEBOUNCE_MS);
-
-        this.debounceTimers.set(filePath, timer);
+        this.batchTimer = setTimeout(async () => {
+            await this.processPendingBatch();
+        }, this.BATCH_MS);
     }
 
     /**
-     * Handle file change event
+     * Process all pending files in a single worker batch
      */
-    private async handleFileChange(uri: vscode.Uri): Promise<void> {
-        const filePath = uri.fsPath;
+    private async processPendingBatch(): Promise<void> {
+        if (this.pendingFiles.size === 0) return;
 
-        // Skip if in node_modules or other excluded paths
-        if (this.shouldSkipFile(filePath)) {
-            return;
-        }
+        const filesToProcess = Array.from(this.pendingFiles);
+        this.pendingFiles.clear();
+        this.batchTimer = null;
+
+        this.outputChannel.appendLine(`FileWatcher: Processing batch of ${filesToProcess.length} files...`);
 
         try {
-            // Read file content
-            const document = await vscode.workspace.openTextDocument(uri);
-            const content = document.getText();
-
-            // Check if file needs re-indexing
-            const needsReindex = await this.workerManager.checkFileHash(filePath, content);
-
-            if (!needsReindex) {
-                this.outputChannel.appendLine(`Skipping unchanged file: ${filePath}`);
-                return;
-            }
-
-            // Determine language
-            const language = this.getLanguage(filePath);
-            if (!language) {
-                return;
-            }
-
-            // Re-index the file
-            this.outputChannel.appendLine(`Re-indexing changed file: ${filePath}`);
-            const result = await this.workerManager.parseFile(filePath, content, language);
-            this.outputChannel.appendLine(
-                `Re-indexed ${filePath}: ${result.symbolCount} symbols, ${result.edgeCount} edges`
+            const validFilesMetadata = await Promise.all(
+                filesToProcess.map(async (filePath) => {
+                    try {
+                        if (!fs.existsSync(filePath)) return null;
+                        const content = await fs.promises.readFile(filePath, 'utf8');
+                        const language = this.getLanguage(filePath);
+                        if (!language) return null;
+                        return { filePath, content, language };
+                    } catch (e) {
+                        return null;
+                    }
+                })
             );
+
+            const filesToParse = validFilesMetadata.filter((f): f is NonNullable<typeof f> => f !== null);
+            if (filesToParse.length === 0) return;
+
+            // Use batch parsing for better cross-file edge resolution and fewer round-trips
+            const result = await this.workerManager.parseBatch(filesToParse);
+
+            this.outputChannel.appendLine(
+                `Batch indexed ${result.filesProcessed} files: ${result.totalSymbols} symbols, ${result.totalEdges} edges`
+            );
+
+            // Invalidate inspector cache since data has changed
+            vscode.commands.executeCommand('sentinel-flow.invalidate-cache');
         } catch (error) {
-            this.outputChannel.appendLine(`Error re-indexing ${filePath}: ${error}`);
+            this.outputChannel.appendLine(`Batch re-indexing failed: ${error}`);
         }
     }
 
@@ -146,8 +143,13 @@ export class FileWatcherManager {
         }
 
         this.outputChannel.appendLine(`File deleted: ${filePath}`);
-        // The file's symbols will be cleaned up on next full index
-        // since we delete symbols by file before re-inserting
+
+        try {
+            await this.workerManager.deleteFileSymbols(filePath);
+            this.outputChannel.appendLine(`Successfully cleaned up symbols for deleted file: ${filePath}`);
+        } catch (error) {
+            this.outputChannel.appendLine(`Error cleaning up symbols for deleted file ${filePath}: ${error}`);
+        }
     }
 
     /**
@@ -177,16 +179,16 @@ export class FileWatcherManager {
      * Get language from file path
      */
     private getLanguage(filePath: string): 'typescript' | 'python' | 'c' | null {
-        const ext = filePath.split('.').pop()?.toLowerCase();
+        const ext = path.extname(filePath).toLowerCase();
 
         switch (ext) {
-            case 'ts':
-            case 'tsx':
+            case '.ts':
+            case '.tsx':
                 return 'typescript';
-            case 'py':
+            case '.py':
                 return 'python';
-            case 'c':
-            case 'h':
+            case '.c':
+            case '.h':
                 return 'c';
             default:
                 return null;

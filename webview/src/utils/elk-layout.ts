@@ -5,6 +5,9 @@ import type { ViewMode } from '../types/viewMode';
 
 const elk = new ELK();
 
+// ── Layout Cache ─────────────────────────────────────────────────────────────
+const layoutCache = new Map<string, { nodes: Node[]; edges: Edge[] }>();
+
 export interface ElkLayoutOptions {
     direction?: 'DOWN' | 'RIGHT' | 'UP' | 'LEFT';
     nodeSpacing?: number;
@@ -47,6 +50,18 @@ export async function applyElkLayout(
     edges: Edge[],
     options: ElkLayoutOptions = {}
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
+    // Check cache first
+    const cacheKey = JSON.stringify({
+        nodes: nodes.map((n) => n.id).sort(),
+        edges: edges.map((e) => `${e.source}->${e.target}`).sort(),
+        options,
+    });
+
+    const cached = layoutCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
     const {
         direction = 'DOWN',
         nodeSpacing = 100,
@@ -276,12 +291,14 @@ export async function applyElkLayout(
         mapNodes(layoutedGraph.children);
     }
 
-    return { nodes: layoutedNodes, edges };
+    const result = { nodes: layoutedNodes, edges };
+    layoutCache.set(cacheKey, result);
+    return result;
 }
 
 /**
- * Clear layout cache (no-op, reserved for future use)
+ * Clear layout cache
  */
 export function clearLayoutCache(): void {
-    // No-op
+    layoutCache.clear();
 }

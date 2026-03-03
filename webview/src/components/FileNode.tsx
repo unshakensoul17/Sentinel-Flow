@@ -9,6 +9,8 @@ export interface FileNodeData extends Record<string, unknown> {
     avgFragility?: number;
     totalBlastRadius?: number;
     collapsed: boolean;
+    nodeId: string;
+    onToggleCollapse?: (id: string) => void;
     // Progressive visibility states
     isDimmed?: boolean;
     isActive?: boolean;
@@ -25,6 +27,7 @@ const FileNode = memo(({ data, style }: NodeProps<Node<FileNodeData>> & { style?
         isActive = false,
         isClickable = true,
         collapsed,
+        nodeId,
         onToggleCollapse,
     } = data;
 
@@ -101,7 +104,7 @@ const FileNode = memo(({ data, style }: NodeProps<Node<FileNodeData>> & { style?
                     onClick={(e) => {
                         e.stopPropagation();
                         if (typeof onToggleCollapse === 'function') {
-                            onToggleCollapse();
+                            onToggleCollapse(nodeId);
                         }
                     }}
                     className="cursor-pointer opacity-60 hover:opacity-100 px-1"

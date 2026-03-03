@@ -161,6 +161,14 @@ class IndexWorker {
                     this.handleCheckFileHash(request.id, request.filePath, request.content);
                     break;
 
+                case 'check-file-hash-batch':
+                    this.handleCheckFileHashBatch(request.id, request.files);
+                    break;
+
+                case 'delete-file-symbols':
+                    this.handleDeleteFileSymbols(request.id, request.filePath);
+                    break;
+
                 case 'export-graph':
                     this.handleExportGraph(request.id);
                     break;
@@ -634,6 +642,42 @@ class IndexWorker {
             storedHash,
             currentHash,
         });
+    }
+
+    private handleCheckFileHashBatch(id: string, files: { filePath: string, contentHash: string }[]): void {
+        if (!this.db) {
+            this.sendError(id, 'Database not initialized');
+            return;
+        }
+
+        const pathsNeedingReindex: string[] = [];
+        for (const file of files) {
+            const storedHash = this.db.getFileHash(file.filePath);
+            if (storedHash !== file.contentHash) {
+                pathsNeedingReindex.push(file.filePath);
+            }
+        }
+
+        this.sendMessage({
+            type: 'file-hash-batch-result',
+            id,
+            pathsNeedingReindex,
+        });
+    }
+
+    private handleDeleteFileSymbols(id: string, filePath: string): void {
+        if (!this.db) {
+            this.sendError(id, 'Database not initialized');
+            return;
+        }
+
+        try {
+            this.db.deleteSymbolsByFile(filePath);
+            this.db.saveToDisk();
+            this.sendMessage({ type: 'delete-file-symbols-complete', id });
+        } catch (error: any) {
+            this.sendError(id, `Error deleting symbols: ${error.message}`);
+        }
     }
 
     /**

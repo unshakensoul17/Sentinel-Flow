@@ -7,6 +7,7 @@ import { useGraphStore } from './stores/useGraphStore';
 import type { GraphData, VSCodeAPI, ExtensionMessage, WebviewMessage } from './types';
 import type { NodeType } from './types/inspector';
 import { PerformanceMonitor } from './utils/performance';
+import { getDataProvider } from './panel/dataProvider';
 
 // Get VS Code API
 const vscode: VSCodeAPI = window.acquireVsCodeApi();
@@ -100,6 +101,13 @@ function App() {
                     if (message.path) {
                         filterByDirectory(message.path);
                     }
+                    break;
+
+                case 'cache-invalidate':
+                    // Invalidate inspector cache post-reindex
+                    getDataProvider(vscode).invalidateCache();
+                    // Also clear current selection to force a fresh look
+                    selectNode(null, null);
                     break;
 
                 case 'theme-changed':

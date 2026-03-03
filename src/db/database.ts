@@ -600,11 +600,19 @@ export class CodeIndexDatabase {
     }
 
     /**
-     * Delete all symbols for a given file
-     * Edges are automatically deleted due to CASCADE
+     * Delete all symbols and file tracking for a given path.
+     * Edges are automatically deleted due to CASCADE on source_id/target_id.
      */
     deleteSymbolsByFile(filePath: string): void {
-        runSql(this.db, 'DELETE FROM symbols WHERE file_path = ?', [filePath]);
+        this.db.run('BEGIN TRANSACTION');
+        try {
+            runSql(this.db, 'DELETE FROM symbols WHERE file_path = ?', [filePath]);
+            runSql(this.db, 'DELETE FROM files WHERE file_path = ?', [filePath]);
+            this.db.run('COMMIT');
+        } catch (e) {
+            this.db.run('ROLLBACK');
+            throw e;
+        }
     }
 
     /**

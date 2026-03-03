@@ -46,7 +46,7 @@ const nodeTypes: NodeTypes = {
     domainNode: DomainNode,
 };
 
-const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: GraphCanvasProps) => {
+const GraphCanvas = ({ graphData, vscode, onNodeClick, searchQuery }: GraphCanvasProps) => {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
@@ -133,10 +133,45 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
 
     const [pendingMode, setPendingMode] = useState<ViewMode | null>(null);
 
-
-
     // BFS Tree Depth control (0: Domain, 1: File, 2: Symbol)
     const [maxDepth, setMaxDepth] = useState(1);
+
+    // Zoom tier for progressive disclosure
+    const [zoomTier, setZoomTier] = useState<'low' | 'medium' | 'high'>('medium');
+    const zoomClass = `zoom-${zoomTier}`;
+
+    // ── PERFORMANCE OPTIMIZATION UTILS ───────────────────────────────────────
+
+    // Derive a stable key for collapsed nodes to prevent full topology rebuilds
+    // on every toggle. Sets are compared by reference, so we use a string key.
+    const collapsedKey = useMemo(
+        () => Array.from(collapsedNodes).sort().join('|'),
+        [collapsedNodes]
+    );
+
+    // Persistent mouse position for precise tooltip placement without re-renders
+    const mousePos = useRef({ x: 0, y: 0 });
+    useEffect(() => {
+        const track = (e: MouseEvent) => {
+            mousePos.current = { x: e.clientX, y: e.clientY };
+        };
+        window.addEventListener('mousemove', track, { passive: true });
+        return () => window.removeEventListener('mousemove', track);
+    }, []);
+
+    // Throttle move events to reduce React re-renders during active pan/zoom
+    const lastMoveTime = useRef(0);
+    const onMove = useCallback((_e: any, viewport: any) => {
+        const now = Date.now();
+        if (now - lastMoveTime.current < 100) return;
+        lastMoveTime.current = now;
+
+        const z = viewport.zoom;
+        const tier = z < 0.6 ? 'low' : z < 1.2 ? 'medium' : 'high';
+        if (tier !== zoomTier) {
+            setZoomTier(tier);
+        }
+    }, [zoomTier]);
 
     // Safety net: ensure codebase mode always starts expanded
     // (store's setViewMode clears collapsedNodes, but this catches edge cases like state restore)
@@ -146,582 +181,320 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
         }
     }, [currentMode, expandAll]);
 
-    // Build all nodes and edges from graph data (only when data changes)
-    useEffect(() => {
-        const buildNodes = async () => {
-            // Mode: Architecture (Macro View)
-            if (currentMode === 'architecture' && architectureSkeleton) {
-                const nodes: Node[] = [];
-                const structureEdges: Edge[] = [];
+    // ── STABLE ACTIONS ───────────────────────────────────────────────────────
+    // These actions are stable references and won't cause child re-renders
+    const handleToggleCollapse = useCallback((nodeId: string) => {
+        toggleNodeCollapse(nodeId);
+    }, [toggleNodeCollapse]);
 
-                // Helper to sort nodes recursively
-                const sortNodes = (nodes: SkeletonNodeData[]): SkeletonNodeData[] => {
-                    return [...nodes].sort((a, b) => {
-                        switch (sortBy) {
-                            case 'complexity':
-                                return (b.avgComplexity || 0) - (a.avgComplexity || 0);
-                            case 'fragility':
-                                return (b.avgFragility || 0) - (a.avgFragility || 0);
-                            case 'blastRadius':
-                                return (b.totalBlastRadius || 0) - (a.totalBlastRadius || 0);
-                            case 'name':
-                            default:
-                                return a.name.localeCompare(b.name);
-                        }
-                    }).map(node => ({
-                        ...node,
-                        children: node.children ? sortNodes(node.children) : undefined
-                    }));
-                };
+    // ── DATA PREPARATION ──────────────────────────────────────────────────────
 
-                // Helper to filter nodes recursively
-                const filterNodes = (nodes: SkeletonNodeData[]): SkeletonNodeData[] => {
-                    if (selectedDomain === 'All') return nodes;
+    // Memoized metrics - computation is stable for same graphData
+    const couplingMetrics = useMemo(() => {
+        if (!graphData) return new Map();
+        return calculateCouplingMetrics(graphData);
+    }, [graphData]);
 
-                    return nodes.reduce<SkeletonNodeData[]>((acc, node) => {
-                        // Check for domain match or folder name match
-                        const isMatch = node.domainName === selectedDomain || node.name === selectedDomain;
+    // 1. Architecture Mode Nodes/Edges
+    const architectureTopology = useMemo(() => {
+        if (currentMode !== 'architecture' || !architectureSkeleton) {
+            return { nodes: [], edges: [] };
+        }
 
-                        if (isMatch) {
-                            // If this node matches, we keep it and its entire sub-hierarchy
-                            acc.push(node);
-                        } else if (node.children) {
-                            // Otherwise, check if any of its children match
-                            const filteredChildren = filterNodes(node.children);
-                            if (filteredChildren.length > 0) {
-                                // Keep this container node but with only matching children
-                                acc.push({ ...node, children: filteredChildren });
-                            }
-                        }
-                        return acc;
-                    }, []);
-                };
+        const nodes: Node[] = [];
+        const structureEdges: Edge[] = [];
 
-                // Apply Sorting & Filtering
-                let processedSkeleton = sortNodes(architectureSkeleton!.nodes);
-                processedSkeleton = filterNodes(processedSkeleton);
-
-                // Helper to calculate health from node metrics
-                const calculateNodeHealth = (n: SkeletonNodeData) => {
-                    // 1. Complexity Score (Lower is better)
-                    // limit 20 as "max reasonable average complexity"
-                    const complexityScore = Math.max(0, 100 - (n.avgComplexity / 20) * 100);
-
-                    // 2. Fragility/Coupling Score (Lower is better)
-                    // limit 50 as "max reasonable average fragility"
-                    const fragilityScore = Math.max(0, 100 - (n.avgFragility / 50) * 100);
-
-                    // Weighted Average (60% Complexity, 40% Fragility)
-                    const healthScore = Math.round(complexityScore * 0.6 + fragilityScore * 0.4);
-
-                    let status: 'healthy' | 'warning' | 'critical' = 'healthy';
-                    if (healthScore < 60) status = 'critical';
-                    else if (healthScore < 80) status = 'warning';
-
-                    return {
-                        healthScore,
-                        status,
-                        // Map fragility to a 0-1 scale for the "Coupling" display
-                        coupling: Math.min(1, n.avgFragility / 50)
-                    };
-                };
-
-                const processRecursiveNodes = (skeletonNodes: SkeletonNodeData[], parentId?: string, parentDomain?: string, depth = 0) => {
-                    // Depth 0: Show only Top-Level Domains (recursion blocked below)
-                    // Depth 1: Show Domains + Nested Folders (Files skipped)
-                    // Depth 2: Show Everything
-
-                    for (const n of skeletonNodes) {
-                        // Filter Logic based on maxDepth
-                        if (maxDepth === 0 && depth > 0) return; // Should not happen due to recursion guard, but safety
-                        if (maxDepth === 1 && !n.isFolder) continue; // Skip files in Structure mode
-
-                        const isCollapsed = collapsedNodes.has(n.id);
-
-                        // Only use domainName if it's defined and NOT the same as the parent's domain
-                        const effectiveDomain = (n.domainName && n.domainName !== parentDomain)
-                            ? n.domainName
-                            : n.name;
-
-                        // Linked Hierarchy Logic:
-                        // If it's a folder, it becomes a top-level node (no parentId) regardless of depth
-                        // If it's a file, it stays inside its parent folder (parentId is preserved)
-                        const nodeParentId = n.isFolder ? undefined : parentId;
-
-                        nodes.push({
-                            id: n.id,
-                            type: n.isFolder ? 'domainNode' : 'fileNode',
-                            position: { x: 0, y: 0 },
-                            parentId: nodeParentId,
-                            extent: n.isFolder ? undefined : 'parent',
-                            data: n.isFolder ? {
-                                domain: effectiveDomain,
-                                health: {
-                                    domain: effectiveDomain,
-                                    status: calculateNodeHealth(n).status,
-                                    healthScore: calculateNodeHealth(n).healthScore,
-                                    avgComplexity: n.avgComplexity,
-                                    coupling: calculateNodeHealth(n).coupling,
-                                    symbolCount: n.symbolCount,
-                                    avgFragility: n.avgFragility,
-                                    totalBlastRadius: n.totalBlastRadius
-                                },
-                                collapsed: isCollapsed,
-                                onToggleCollapse: () => toggleNodeCollapse(n.id),
-                            } as DomainNodeData : {
-                                filePath: n.id,
-                                symbolCount: n.symbolCount,
-                                avgCoupling: 0,
-                                avgFragility: n.avgFragility,
-                                totalBlastRadius: n.totalBlastRadius,
-                                collapsed: false,
-                                onToggleCollapse: undefined,
-                                label: n.name,
-                                domainName: n.domainName
-                            } as FileNodeData,
-                        });
-
-                        // If parent exists and this is a folder, create a structural edge
-                        if (parentId && n.isFolder) {
-                            structureEdges.push({
-                                id: `struct-${parentId}-${n.id}`,
-                                source: parentId,
-                                target: n.id,
-                                type: 'smoothstep',
-                                animated: false,
-                                style: {
-                                    stroke: '#6b7280',
-                                    strokeWidth: 2,
-                                    strokeDasharray: '5,5',
-                                    opacity: 0.5
-                                },
-                                label: 'contains'
-                            });
-                        }
-
-                        // Recursion Logic
-                        // If maxDepth is 0, we do NOT recurse (showing only top level)
-                        const shouldRecurse = maxDepth > 0 && !isCollapsed && n.children && n.children.length > 0;
-
-                        if (shouldRecurse) {
-                            processRecursiveNodes(n.children!, n.id, n.domainName || parentDomain, depth + 1);
-                        }
-                    }
-                };
-
-                processRecursiveNodes(processedSkeleton);
-
-                const dependencyEdges: Edge[] = architectureSkeleton!.edges.map((e, i) => ({
-                    id: `skel-edge-${i}`,
-                    source: e.source,
-                    target: e.target,
-                    type: 'default',
-                    label: e.weight > 1 ? e.weight.toString() : undefined,
-                    style: { strokeWidth: Math.min(e.weight, 5) }
-                }));
-
-                setAllNodes(nodes);
-                setAllEdges([...structureEdges, ...dependencyEdges]);
-                return;
-            }
-
-            // Mode: Codebase (Detailed Symbol-Level Graph)
-            // Like Architecture but drills down to individual symbols with real call/import edges.
-            if (currentMode === 'codebase' && graphData) {
-                const codebaseNodes: Node[] = [];
-                const codebaseEdges: Edge[] = [];
-
-                // Calculate coupling metrics for color coding
-                const metrics = calculateCouplingMetrics(graphData);
-
-                // Domain filtering
-                const filteredSymbols = selectedDomain === 'All'
-                    ? (graphData.symbols ?? [])
-                    : (graphData.symbols ?? []).filter(s => (s.domain || 'unknown') === selectedDomain);
-
-                // Group by domain → file → symbols
-                const domainFileMap = new Map<string, Map<string, typeof graphData.symbols>>();
-                for (const sym of filteredSymbols) {
-                    const domain = sym.domain || 'unknown';
-                    if (!domainFileMap.has(domain)) domainFileMap.set(domain, new Map());
-                    const fMap = domainFileMap.get(domain)!;
-                    if (!fMap.has(sym.filePath)) fMap.set(sym.filePath, []);
-                    fMap.get(sym.filePath)!.push(sym);
+        // Helper to sort nodes recursively
+        const sortNodes = (nodes: SkeletonNodeData[]): SkeletonNodeData[] => {
+            return [...nodes].sort((a, b) => {
+                switch (sortBy) {
+                    case 'complexity': return (b.avgComplexity || 0) - (a.avgComplexity || 0);
+                    case 'fragility': return (b.avgFragility || 0) - (a.avgFragility || 0);
+                    case 'blastRadius': return (b.totalBlastRadius || 0) - (a.totalBlastRadius || 0);
+                    case 'name':
+                    default: return a.name.localeCompare(b.name);
                 }
-
-                // Sort symbols within each file
-                const sortSymbols = (syms: typeof graphData.symbols) => {
-                    return [...syms].sort((a, b) => {
-                        switch (sortBy) {
-                            case 'complexity': return (b.complexity || 0) - (a.complexity || 0);
-                            case 'fragility': return 0; // symbols don't have fragility directly
-                            case 'blastRadius': return 0;
-                            case 'name':
-                            default: return a.name.localeCompare(b.name);
-                        }
-                    });
-                };
-
-                // Build hierarchy
-                for (const [domain, fileMap] of domainFileMap) {
-                    const domainNodeId = `domain:${domain}`;
-                    const isDomainCollapsed = collapsedNodes.has(domainNodeId);
-
-                    // Create domain node
-                    const domainSymbols = Array.from(fileMap.values()).flat();
-                    const avgComplexity = domainSymbols.length > 0
-                        ? domainSymbols.reduce((s, sym) => s + (sym.complexity || 0), 0) / domainSymbols.length
-                        : 0;
-
-                    codebaseNodes.push({
-                        id: domainNodeId,
-                        type: 'domainNode',
-                        position: { x: 0, y: 0 },
-                        data: {
-                            domain,
-                            health: {
-                                domain,
-                                symbolCount: domainSymbols.length,
-                                avgComplexity,
-                                coupling: 0,
-                                healthScore: Math.max(0, 100 - avgComplexity * 5),
-                                status: avgComplexity > 15 ? 'critical' : avgComplexity > 8 ? 'warning' : 'healthy',
-                            },
-                            collapsed: isDomainCollapsed,
-                            onToggleCollapse: () => toggleNodeCollapse(domainNodeId),
-                        } as DomainNodeData,
-                    });
-
-                    if (isDomainCollapsed || maxDepth === 0) continue;
-
-                    for (const [filePath, fileSymbols] of fileMap) {
-                        const fileNodeId = `${domain}:${filePath}`;
-                        const isFileCollapsed = collapsedNodes.has(fileNodeId);
-
-                        const fileCouplings = fileSymbols
-                            .map(s => {
-                                const key = `${s.filePath}:${s.name}:${s.range.startLine}`;
-                                return metrics.get(key)?.normalizedScore || 0;
-                            })
-                            .filter(score => score > 0);
-                        const avgCoupling = fileCouplings.length > 0
-                            ? fileCouplings.reduce((a, b) => a + b, 0) / fileCouplings.length
-                            : 0;
-
-                        codebaseNodes.push({
-                            id: fileNodeId,
-                            type: 'fileNode',
-                            position: { x: 0, y: 0 },
-                            parentId: domainNodeId,
-                            extent: 'parent',
-                            data: {
-                                filePath,
-                                symbolCount: fileSymbols.length,
-                                avgCoupling,
-                                collapsed: isFileCollapsed,
-                                onToggleCollapse: () => toggleNodeCollapse(fileNodeId),
-                                label: filePath.split('/').pop() || filePath,
-                            } as FileNodeData,
-                        });
-
-                        // Skip symbols if file is collapsed or depth <= 1
-                        if (isFileCollapsed || maxDepth <= 1) continue;
-
-                        // Create symbol nodes
-                        const sorted = sortSymbols(fileSymbols);
-                        for (const sym of sorted) {
-                            const symKey = `${sym.filePath}:${sym.name}:${sym.range.startLine}`;
-                            const coupling = metrics.get(symKey) || {
-                                nodeId: symKey,
-                                inDegree: 0,
-                                outDegree: 0,
-                                cbo: 0,
-                                normalizedScore: 0,
-                                color: '#3b82f6',
-                            };
-
-                            codebaseNodes.push({
-                                id: symKey,
-                                type: 'symbolNode',
-                                position: { x: 0, y: 0 },
-                                parentId: fileNodeId,
-                                extent: 'parent',
-                                data: {
-                                    label: sym.name,
-                                    symbolType: sym.type,
-                                    complexity: sym.complexity,
-                                    coupling,
-                                    filePath: sym.filePath,
-                                    line: sym.range.startLine,
-                                } as SymbolNodeData,
-                            });
-                        }
-                    }
-                }
-
-                // Build edges — redirect collapsed nodes
-                const visibleNodeIds = new Set(codebaseNodes.map(n => n.id));
-                const nodeRedirection = new Map<string, string>();
-
-                (graphData.symbols ?? []).forEach(sym => {
-                    const symbolId = `${sym.filePath}:${sym.name}:${sym.range.startLine}`;
-                    const domainId = `domain:${sym.domain || 'unknown'}`;
-                    const fileId = `${sym.domain || 'unknown'}:${sym.filePath}`;
-
-                    if (collapsedNodes.has(domainId) || maxDepth === 0) {
-                        nodeRedirection.set(symbolId, domainId);
-                    } else if (collapsedNodes.has(fileId) || maxDepth <= 1) {
-                        nodeRedirection.set(symbolId, fileId);
-                    }
-                });
-
-                const uniqueEdgeKeys = new Set<string>();
-                (graphData.edges ?? []).forEach((edge, index) => {
-                    let source = edge.source;
-                    let target = edge.target;
-
-                    if (nodeRedirection.has(source)) source = nodeRedirection.get(source)!;
-                    if (nodeRedirection.has(target)) target = nodeRedirection.get(target)!;
-
-                    if (source !== target && visibleNodeIds.has(source) && visibleNodeIds.has(target)) {
-                        const key = `${source}-${target}-${edge.type}`;
-                        if (!uniqueEdgeKeys.has(key)) {
-                            uniqueEdgeKeys.add(key);
-                            codebaseEdges.push({
-                                id: `cb-edge-${index}`,
-                                source,
-                                target,
-                                type: 'smoothstep',
-                                animated: edge.type === 'call',
-                                style: {
-                                    stroke: edge.type === 'call' ? '#3b82f6' : edge.type === 'import' ? '#10b981' : '#6b7280',
-                                    strokeWidth: 1.5,
-                                },
-                            });
-                        }
-                    }
-                });
-
-                const optimized = optimizeEdges(codebaseEdges, 10000);
-                setAllNodes(codebaseNodes);
-                setAllEdges(optimized);
-                return;
-            }
-
-
-            if (currentMode === 'trace' && functionTrace) {
-                const nodes: Node[] = functionTrace.nodes.map(n => ({
-                    id: n.id,
-                    type: 'symbolNode',
-                    position: { x: 0, y: 0 }, // Let layout engine handle it
-                    data: {
-                        label: n.label,
-                        symbolType: n.type as any,
-                        complexity: n.complexity,
-                        blastRadius: n.blastRadius,
-                        filePath: n.filePath,
-                        line: n.line,
-                        isSink: n.isSink,
-                        coupling: { color: n.isSink ? '#ef4444' : '#3b82f6' } as any
-                    } as SymbolNodeData,
-                }));
-
-                const edges: Edge[] = functionTrace.edges.map((e, i) => {
-                    const targetNode = functionTrace.nodes.find(n => n.id === e.target);
-                    const isTargetComplex = targetNode ? targetNode.complexity > 10 : false;
-
-                    return {
-                        id: `trace-edge-${i}`,
-                        source: e.source,
-                        target: e.target,
-                        type: 'smoothstep',
-                        animated: true,
-                        style: { stroke: isTargetComplex ? '#ef4444' : '#3b82f6' }
-                    };
-                });
-
-                setAllNodes(nodes);
-                setAllEdges(edges);
-                return;
-            }
-
-            // Default Mode: Full Graph
-            if (!graphData) {
-                setAllNodes([]);
-                setAllEdges([]);
-                clearLayoutCache();
-                clearRelationshipCache();
-                return;
-            }
-
-            // Calculate coupling metrics
-            const metrics = calculateCouplingMetrics(graphData);
-
-            // Create domain nodes (top level)
-            const domainNodes: Node[] = (graphData.domains ?? []).map((domainData) => {
-                const nodeId = `domain:${domainData.domain}`;
-                const isCollapsed = collapsedNodes.has(nodeId);
-
-                return {
-                    id: nodeId,
-                    type: 'domainNode',
-                    position: { x: 0, y: 0 },
-                    data: {
-                        domain: domainData.domain,
-                        health: domainData.health,
-                        collapsed: isCollapsed,
-                        onToggleCollapse: () => toggleNodeCollapse(nodeId),
-                    } as DomainNodeData,
-                };
-            });
-
-            // Group symbols by domain and file
-            const symbolsByDomain = new Map<string, Map<string, typeof graphData.symbols>>();
-            (graphData.symbols ?? []).forEach((symbol) => {
-                const domain = symbol.domain || 'unknown';
-                if (!symbolsByDomain.has(domain)) {
-                    symbolsByDomain.set(domain, new Map());
-                }
-                const fileMap = symbolsByDomain.get(domain)!;
-                if (!fileMap.has(symbol.filePath)) {
-                    fileMap.set(symbol.filePath, []);
-                }
-                fileMap.get(symbol.filePath)!.push(symbol);
-            });
-
-            // Create file and symbol nodes grouped by domain
-            const fileNodes: Node[] = [];
-            const symbolNodes: Node[] = [];
-
-            for (const [domain, fileMap] of symbolsByDomain) {
-                const domainNodeId = `domain:${domain}`;
-                if (collapsedNodes.has(domainNodeId)) continue; // Optimization: Don't create children if collapsed
-
-                for (const [filePath, symbols] of fileMap) {
-                    const fileCouplings = symbols
-                        .map((s) => {
-                            const key = `${s.filePath}:${s.name}:${s.range.startLine}`;
-                            return metrics.get(key)?.normalizedScore || 0;
-                        })
-                        .filter((score) => score > 0);
-
-                    const avgCoupling =
-                        fileCouplings.length > 0
-                            ? fileCouplings.reduce((a, b) => a + b, 0) / fileCouplings.length
-                            : 0;
-
-                    // Create file node as child of domain
-                    const fileNodeId = `${domain}:${filePath}`;
-                    const isFileCollapsed = collapsedNodes.has(fileNodeId);
-
-                    fileNodes.push({
-                        id: fileNodeId,
-                        type: 'fileNode',
-                        position: { x: 0, y: 0 },
-                        data: {
-                            filePath,
-                            symbolCount: symbols.length,
-                            avgCoupling,
-                            collapsed: isFileCollapsed,
-                            onToggleCollapse: () => toggleNodeCollapse(fileNodeId),
-                        } as FileNodeData,
-                        parentId: domainNodeId,
-                        extent: 'parent',
-                    });
-
-                    // If file is collapsed, skip symbols
-                    if (isFileCollapsed) continue;
-
-                    // Create symbol nodes as children of file nodes
-                    symbols.forEach((symbol) => {
-                        const key = `${symbol.filePath}:${symbol.name}:${symbol.range.startLine}`;
-                        const coupling = metrics.get(key) || {
-                            nodeId: key,
-                            inDegree: 0,
-                            outDegree: 0,
-                            cbo: 0,
-                            normalizedScore: 0,
-                            color: '#3b82f6',
-                        };
-
-                        symbolNodes.push({
-                            id: key,
-                            type: 'symbolNode',
-                            position: { x: 0, y: 0 },
-                            data: {
-                                label: symbol.name,
-                                symbolType: symbol.type,
-                                complexity: symbol.complexity,
-                                coupling,
-                                filePath: symbol.filePath,
-                                line: symbol.range.startLine,
-                            } as SymbolNodeData,
-                            parentId: fileNodeId,
-                            extent: 'parent',
-                        });
-                    });
-                }
-            }
-
-            // Edge Redirection Logic for Full Graph
-            const visibleNodeIds = new Set([
-                ...domainNodes.map(n => n.id),
-                ...fileNodes.map(n => n.id),
-                ...symbolNodes.map(n => n.id)
-            ]);
-
-            const nodeRedirection = new Map<string, string>();
-            (graphData.symbols ?? []).forEach(symbol => {
-                const symbolId = `${symbol.filePath}:${symbol.name}:${symbol.range.startLine}`;
-                const domainId = `domain:${symbol.domain || 'unknown'}`;
-                const fileId = `${symbol.domain || 'unknown'}:${symbol.filePath}`;
-
-                if (collapsedNodes.has(domainId)) {
-                    nodeRedirection.set(symbolId, domainId);
-                } else if (collapsedNodes.has(fileId)) {
-                    nodeRedirection.set(symbolId, fileId);
-                }
-            });
-
-            const processedEdges: Edge[] = [];
-            const uniqueEdges = new Set<string>();
-
-            (graphData.edges ?? []).forEach((edge, index) => {
-                let source = edge.source;
-                let target = edge.target;
-
-                if (nodeRedirection.has(source)) source = nodeRedirection.get(source)!;
-                if (nodeRedirection.has(target)) target = nodeRedirection.get(target)!;
-
-                if (source !== target && visibleNodeIds.has(source) && visibleNodeIds.has(target)) {
-                    const key = `${source}-${target}-${edge.type}`;
-                    if (!uniqueEdges.has(key)) {
-                        uniqueEdges.add(key);
-                        processedEdges.push({
-                            id: `edge-${index}`,
-                            source,
-                            target,
-                            type: 'smoothstep',
-                            animated: edge.type === 'call',
-                            style: {
-                                stroke: edge.type === 'call' ? '#3b82f6' : edge.type === 'import' ? '#10b981' : '#6b7280',
-                                strokeWidth: 1.5,
-                            },
-                        });
-                    }
-                }
-            });
-
-            const optimizedEdges = optimizeEdges(processedEdges, 10000);
-            setAllNodes([...domainNodes, ...fileNodes, ...symbolNodes]);
-            setAllEdges(optimizedEdges);
-
-
+            }).map(node => ({
+                ...node,
+                children: node.children ? sortNodes(node.children) : undefined
+            }));
         };
 
-        buildNodes();
+        // Helper to filter nodes recursively
+        const filterNodes = (nodes: SkeletonNodeData[]): SkeletonNodeData[] => {
+            if (selectedDomain === 'All') return nodes;
+            return nodes.reduce<SkeletonNodeData[]>((acc, node) => {
+                const isMatch = node.domainName === selectedDomain || node.name === selectedDomain;
+                if (isMatch) acc.push(node);
+                else if (node.children) {
+                    const filteredChildren = filterNodes(node.children);
+                    if (filteredChildren.length > 0) acc.push({ ...node, children: filteredChildren });
+                }
+                return acc;
+            }, []);
+        };
+
+        const processedSkeleton = filterNodes(sortNodes(architectureSkeleton.nodes));
+
+        const calculateNodeHealth = (n: SkeletonNodeData) => {
+            const complexityScore = Math.max(0, 100 - (n.avgComplexity / 20) * 100);
+            const fragilityScore = Math.max(0, 100 - (n.avgFragility / 50) * 100);
+            const healthScore = Math.round(complexityScore * 0.6 + fragilityScore * 0.4);
+            let status: 'healthy' | 'warning' | 'critical' = 'healthy';
+            if (healthScore < 60) status = 'critical';
+            else if (healthScore < 80) status = 'warning';
+            return { healthScore, status, coupling: Math.min(1, n.avgFragility / 50) };
+        };
+
+        const processRecursiveNodes = (skeletonNodes: SkeletonNodeData[], parentId?: string, parentDomain?: string, depth = 0) => {
+            for (const n of skeletonNodes) {
+                if (maxDepth === 0 && depth > 0) continue;
+                if (maxDepth === 1 && !n.isFolder) continue;
+
+                const isCollapsed = collapsedNodes.has(n.id);
+                const effectiveDomain = (n.domainName && n.domainName !== parentDomain) ? n.domainName : n.name;
+                const nodeParentId = n.isFolder ? undefined : parentId;
+
+                const healthInfo = calculateNodeHealth(n);
+
+                nodes.push({
+                    id: n.id,
+                    type: n.isFolder ? 'domainNode' : 'fileNode',
+                    position: { x: 0, y: 0 },
+                    parentId: nodeParentId,
+                    data: n.isFolder ? {
+                        nodeId: n.id,
+                        domain: effectiveDomain,
+                        health: {
+                            domain: effectiveDomain,
+                            status: healthInfo.status,
+                            healthScore: healthInfo.healthScore,
+                            avgComplexity: n.avgComplexity,
+                            coupling: healthInfo.coupling,
+                            symbolCount: n.symbolCount,
+                            avgFragility: n.avgFragility,
+                            totalBlastRadius: n.totalBlastRadius
+                        },
+                        collapsed: isCollapsed,
+                        onToggleCollapse: toggleNodeCollapse,
+                    } as DomainNodeData : {
+                        nodeId: n.id,
+                        filePath: n.id,
+                        symbolCount: n.symbolCount,
+                        avgCoupling: 0,
+                        avgFragility: n.avgFragility,
+                        totalBlastRadius: n.totalBlastRadius,
+                        collapsed: false,
+                        label: n.name,
+                        domainName: n.domainName
+                    } as FileNodeData,
+                });
+
+                if (parentId && n.isFolder) {
+                    structureEdges.push({
+                        id: `struct-${parentId}-${n.id}`,
+                        source: parentId,
+                        target: n.id,
+                        type: 'smoothstep',
+                        style: { stroke: '#6b7280', strokeWidth: 2, strokeDasharray: '5,5', opacity: 0.5 },
+                        label: 'contains'
+                    });
+                }
+
+                if (maxDepth > 0 && !isCollapsed && n.children?.length) {
+                    processRecursiveNodes(n.children, n.id, n.domainName || parentDomain, depth + 1);
+                }
+            }
+        };
+
+        processRecursiveNodes(processedSkeleton);
+
+        const dependencyEdges: Edge[] = architectureSkeleton.edges.map((e, i) => ({
+            id: `skel-edge-${i}`,
+            source: e.source,
+            target: e.target,
+            style: { strokeWidth: Math.min(e.weight, 5) },
+            label: e.weight > 1 ? e.weight.toString() : undefined
+        }));
+
+        return { nodes, edges: [...structureEdges, ...dependencyEdges] };
+    }, [currentMode, architectureSkeleton, sortBy, selectedDomain, maxDepth, collapsedKey, toggleNodeCollapse]);
+
+    // 2. Codebase Mode Nodes/Edges
+    const codebaseTopology = useMemo(() => {
+        if (currentMode !== 'codebase' || !graphData) {
+            return { nodes: [], edges: [] };
+        }
+
+        const nodes: Node[] = [];
+        const edges: Edge[] = [];
+
+        const filteredSymbols = selectedDomain === 'All'
+            ? (graphData.symbols ?? [])
+            : (graphData.symbols ?? []).filter(s => (s.domain || 'unknown') === selectedDomain);
+
+        const domainFileMap = new Map<string, Map<string, typeof graphData.symbols>>();
+        for (const sym of filteredSymbols) {
+            const domain = sym.domain || 'unknown';
+            if (!domainFileMap.has(domain)) domainFileMap.set(domain, new Map());
+            const fMap = domainFileMap.get(domain)!;
+            if (!fMap.has(sym.filePath)) fMap.set(sym.filePath, []);
+            fMap.get(sym.filePath)!.push(sym);
+        }
+
+        const sortSymbols = (syms: typeof graphData.symbols) => {
+            return [...syms].sort((a, b) => {
+                switch (sortBy) {
+                    case 'complexity': return (b.complexity || 0) - (a.complexity || 0);
+                    case 'name':
+                    default: return a.name.localeCompare(b.name);
+                }
+            });
+        };
+
+        for (const [domain, fileMap] of domainFileMap) {
+            const domainNodeId = `domain:${domain}`;
+            const isDomainCollapsed = collapsedNodes.has(domainNodeId);
+            const domainSymbols = Array.from(fileMap.values()).flat();
+            const avgComplexity = domainSymbols.length > 0
+                ? domainSymbols.reduce((s, sym) => s + (sym.complexity || 0), 0) / domainSymbols.length
+                : 0;
+
+            nodes.push({
+                id: domainNodeId,
+                type: 'domainNode',
+                position: { x: 0, y: 0 },
+                data: {
+                    nodeId: domainNodeId,
+                    domain,
+                    health: {
+                        domain, status: avgComplexity > 15 ? 'critical' : avgComplexity > 8 ? 'warning' : 'healthy',
+                        healthScore: Math.max(0, 100 - avgComplexity * 5),
+                        symbolCount: domainSymbols.length, avgComplexity, coupling: 0
+                    },
+                    collapsed: isDomainCollapsed,
+                    onToggleCollapse: toggleNodeCollapse,
+                } as DomainNodeData,
+            });
+
+            if (isDomainCollapsed || maxDepth === 0) continue;
+
+            for (const [filePath, fileSymbols] of fileMap) {
+                const fileNodeId = `${domain}:${filePath}`;
+                const isFileCollapsed = collapsedNodes.has(fileNodeId);
+                const fileCouplings = fileSymbols
+                    .map(s => {
+                        const key = `${s.filePath}:${s.name}:${s.range.startLine}`;
+                        return couplingMetrics.get(key)?.normalizedScore || 0;
+                    })
+                    .filter(score => score > 0);
+                const avgCoupling = fileCouplings.length > 0 ? fileCouplings.reduce((a, b) => a + b, 0) / fileCouplings.length : 0;
+
+                nodes.push({
+                    id: fileNodeId,
+                    type: 'fileNode',
+                    position: { x: 0, y: 0 },
+                    parentId: domainNodeId,
+                    extent: 'parent',
+                    data: {
+                        nodeId: fileNodeId,
+                        filePath, symbolCount: fileSymbols.length, avgCoupling,
+                        collapsed: isFileCollapsed,
+                        onToggleCollapse: toggleNodeCollapse,
+                        label: filePath.split('/').pop() || filePath,
+                    } as FileNodeData,
+                });
+
+                if (isFileCollapsed || maxDepth <= 1) continue;
+
+                const sorted = sortSymbols(fileSymbols);
+                for (const sym of sorted) {
+                    const symKey = `${sym.filePath}:${sym.name}:${sym.range.startLine}`;
+                    nodes.push({
+                        id: symKey,
+                        type: 'symbolNode',
+                        position: { x: 0, y: 0 },
+                        parentId: fileNodeId,
+                        extent: 'parent',
+                        data: {
+                            label: sym.name, symbolType: sym.type, complexity: sym.complexity,
+                            coupling: couplingMetrics.get(symKey),
+                            filePath: sym.filePath, line: sym.range.startLine,
+                        } as SymbolNodeData,
+                    });
+                }
+            }
+        }
+
+        // Edges for codebase
+        const visibleNodeIds = new Set(nodes.map(n => n.id));
+        const nodeRedirection = new Map<string, string>();
+        (graphData.symbols ?? []).forEach(sym => {
+            const symId = `${sym.filePath}:${sym.name}:${sym.range.startLine}`;
+            const domId = `domain:${sym.domain || 'unknown'}`;
+            const filId = `${sym.domain || 'unknown'}:${sym.filePath}`;
+            if (collapsedNodes.has(domId) || maxDepth === 0) nodeRedirection.set(symId, domId);
+            else if (collapsedNodes.has(filId) || maxDepth <= 1) nodeRedirection.set(symId, filId);
+        });
+
+        const uniqueEdgeKeys = new Set<string>();
+        (graphData.edges ?? []).forEach((edge, index) => {
+            let s = edge.source; let t = edge.target;
+            if (nodeRedirection.has(s)) s = nodeRedirection.get(s)!;
+            if (nodeRedirection.has(t)) t = nodeRedirection.get(t)!;
+            if (s !== t && visibleNodeIds.has(s) && visibleNodeIds.has(t)) {
+                const key = `${s}-${t}-${edge.type}`;
+                if (!uniqueEdgeKeys.has(key)) {
+                    uniqueEdgeKeys.add(key);
+                    edges.push({
+                        id: `cb-edge-${index}`, source: s, target: t, type: 'smoothstep',
+                        animated: edge.type === 'call',
+                        style: { stroke: edge.type === 'call' ? '#3b82f6' : edge.type === 'import' ? '#10b981' : '#6b7280', strokeWidth: 1.5 },
+                    });
+                }
+            }
+        });
+
+        return { nodes, edges: optimizeEdges(edges, 10000) };
+    }, [currentMode, graphData, couplingMetrics, sortBy, selectedDomain, maxDepth, collapsedKey, toggleNodeCollapse]);
+
+    // 3. Trace Mode Nodes/Edges
+    const traceTopology = useMemo(() => {
+        if (currentMode !== 'trace' || !functionTrace) return { nodes: [], edges: [] };
+
+        const nodes: Node[] = functionTrace.nodes.map(n => ({
+            id: n.id, type: 'symbolNode', position: { x: 0, y: 0 },
+            data: {
+                label: n.label, symbolType: n.type as any, complexity: n.complexity,
+                blastRadius: n.blastRadius, filePath: n.filePath, line: n.line, isSink: n.isSink,
+                coupling: { color: n.isSink ? '#ef4444' : '#3b82f6' } as any
+            } as SymbolNodeData,
+        }));
+
+        const edges: Edge[] = functionTrace.edges.map((e, i) => {
+            const targetNode = functionTrace.nodes.find(node => node.id === e.target);
+            const complexity = targetNode?.complexity ?? 0;
+            return {
+                id: `trace-edge-${i}`, source: e.source, target: e.target, type: 'smoothstep', animated: true,
+                style: { stroke: complexity > 10 ? '#ef4444' : '#3b82f6' }
+            };
+        });
+
+        return { nodes, edges };
+    }, [currentMode, functionTrace]);
+
+    // Combined topology state - changes ONLY when relevant mode data changes
+    useEffect(() => {
+        let currentTopology = { nodes: [] as Node[], edges: [] as Edge[] };
+        if (currentMode === 'architecture') currentTopology = architectureTopology;
+        else if (currentMode === 'codebase') currentTopology = codebaseTopology;
+        else if (currentMode === 'trace') currentTopology = traceTopology;
+
+        setAllNodes(currentTopology.nodes);
+        setAllEdges(currentTopology.edges);
         setHasInitialFit(false);
-    }, [graphData, currentMode, collapsedNodes, toggleNodeCollapse, architectureSkeleton, functionTrace, selectedDomain, sortBy, maxDepth]);
+    }, [currentMode, architectureTopology, codebaseTopology, traceTopology]);
+
 
 
 
@@ -831,6 +604,8 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
 
         // Debounce layout to prevent rapid re-calculations
         const layoutTimer = setTimeout(() => {
+            let cancelled = false;
+
             const runLayout = async () => {
                 setIsLayouting(true);
                 perfMonitor.startTimer('layout');
@@ -861,22 +636,31 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
                         layoutedEdges = result.edges;
                     }
 
+                    if (cancelled) return; // Abort stale layout update
+
                     setNodes(layoutedNodes);
                     setEdges(layoutedEdges);
 
                     perfMonitor.endTimer('layout');
                 } catch (error) {
+                    if (cancelled) return;
                     console.error('Layout failed:', error);
                     // Fallback: use nodes without layout
                     setNodes(visibleNodes);
                     setEdges(visibleEdges);
                     perfMonitor.endTimer('layout');
                 } finally {
-                    setIsLayouting(false);
+                    if (!cancelled) {
+                        setIsLayouting(false);
+                    }
                 }
             };
 
             runLayout();
+
+            return () => {
+                cancelled = true;
+            };
         }, 150); // 150ms debounce
 
         return () => clearTimeout(layoutTimer);
@@ -888,17 +672,24 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
     useEffect(() => {
         if (nodes.length === 0 || isLayouting) return;
 
-        const warmTimer = setTimeout(() => {
+        const warmTimer = setTimeout(async () => {
             const provider = getDataProvider(vscode);
             const topNodes = nodes
                 .filter(n => n.type === 'domainNode' || n.type === 'fileNode')
-                .slice(0, 20); // cap to avoid flooding the worker
+                .slice(0, 10); // reduced cap to avoid flooding
+
+            let alive = true;
 
             for (const node of topNodes) {
+                if (!alive) break;
                 const nodeType = node.type === 'domainNode' ? 'domain' : 'file';
-                // Fire-and-forget — silently warms the cache, errors are ignored
-                provider.getAll(node.id, nodeType as any).catch(() => { });
+                // Sequential fire-and-forget with yield behavior
+                await provider.getAll(node.id, nodeType as any).catch(() => { });
+                // Small gap to avoid starving the IPC/message bus
+                await new Promise(r => setTimeout(r, 100));
             }
+
+            return () => { alive = false; };
         }, 2000); // 2s after graph settles so layout isn't competing
 
         return () => clearTimeout(warmTimer);
@@ -949,43 +740,46 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
         return ids;
     }, [activeId, edges]);
 
-    // Memoize interactive nodes with styles
-    const interactiveNodes = useMemo(() => {
-        const result = nodes.map(node => {
-            const isHovered = node.id === hoveredNodeId;
-            const isConnected = activeId ? connectedNodeIds.has(node.id) : false;
-
-            // Highlight Logic:
-            // 1. If NO node is hovered, ALL are active (default state).
-            // 2. If a node IS hovered, only IT and its CONNECTED neighbors are active.
-            // 3. Everything else is dimmed.
-            const isDimmed = activeId !== null && !isHovered && !isConnected;
-            const isActive = activeId === null || isHovered || isConnected;
-
-            return {
-                ...node,
-                className: isHovered || isConnected ? 'highlighted' : '',
-                data: {
-                    ...node.data,
-                    isDimmed,
-                    isActive,
-                    isClickable: true,
-                },
-                // Z-Index Management:
-                // Hovered/Connected nodes pop to front (zIndex 1000+)
-                // FileNodes generally above DomainNodes (zIndex 10 vs 1)
-                zIndex: isHovered ? 2000 : (isConnected ? 1500 : (node.type === 'fileNode' ? 10 : 1)),
-            };
-        });
-
-        // SORTING: Render DomainNodes FIRST (bottom), then FileNodes (top)
-        // This ensures FileNodes are physically later in DOM, appearing on top of Domains even without z-index
-        return result.sort((a, b) => {
+    const sortedNodes = useMemo(() => {
+        return [...nodes].sort((a, b) => {
             if (a.type === 'domainNode' && b.type !== 'domainNode') return -1;
             if (a.type !== 'domainNode' && b.type === 'domainNode') return 1;
             return 0;
         });
-    }, [nodes, hoveredNodeId, activeId, connectedNodeIds]);
+    }, [nodes]);
+
+    // Memoize interactive nodes with styles
+    const interactiveNodes = useMemo(() => {
+        if (!activeId) return sortedNodes;
+
+        return sortedNodes.map(node => {
+            const isHovered = node.id === hoveredNodeId;
+            const isConnected = activeId ? connectedNodeIds.has(node.id) : false;
+
+            // Highlight Logic:
+            // Unconnected nodes return the same reference → React.memo prevents their re-render
+            if (!isHovered && !isConnected) {
+                return {
+                    ...node,
+                    className: '',
+                    data: { ...node.data, isDimmed: true, isActive: false },
+                    zIndex: node.type === 'fileNode' ? 10 : 1
+                };
+            }
+
+            return {
+                ...node,
+                className: 'highlighted',
+                data: {
+                    ...node.data,
+                    isDimmed: false,
+                    isActive: true,
+                    isClickable: true,
+                },
+                zIndex: isHovered ? 2000 : 1500,
+            };
+        });
+    }, [sortedNodes, hoveredNodeId, activeId, connectedNodeIds]);
 
     const interactiveEdges = useMemo(() => {
         if (!activeId) return edges;
@@ -1053,8 +847,8 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
         // Clear any pending hover triggers (debouncing)
         if (hoverTimer.current) clearTimeout(hoverTimer.current);
 
-        const clientX = event.clientX;
-        const clientY = event.clientY;
+        const clientX = mousePos.current.x;
+        const clientY = mousePos.current.y;
         const nodeData = node.data as any;
 
         // In codebase detailed mode (maxDepth === 2), disable hover highlight for domain and file
@@ -1131,25 +925,7 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
         [onNodeClick, setFocusedNodeId, focusNode]
     );
 
-    // Zoom Tier State for Progressive Disclosure (Throttled re-renders)
-    const [zoomTier, setZoomTier] = useState<'low' | 'medium' | 'high'>('medium');
 
-    // Zoom Level Classes matched to Tiers
-    // < 0.6: Zoom Low (Icon + Name)
-    // 0.6 - 1.2: Zoom Medium (Icon + Name + Symbol Count)
-    // > 1.2: Zoom High (Icon + Name + Symbol Count (+ Ext details?))
-    const zoomClass = `zoom-${zoomTier}`;
-
-    const onMove = useCallback((_event: any, viewport: { x: number; y: number; zoom: number }) => {
-        const z = viewport.zoom;
-        let newTier: 'low' | 'medium' | 'high' = 'medium';
-
-        if (z < 0.6) newTier = 'low';
-        else if (z >= 0.6 && z < 1.2) newTier = 'medium';
-        else newTier = 'high';
-
-        setZoomTier(prev => prev !== newTier ? newTier : prev);
-    }, []);
 
     // Handle node double click to open file
     const handleNodeDoubleClick = useCallback(
@@ -1201,11 +977,9 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
         setPendingMode(null);
     }, []);
 
-    // Memoize MiniMap nodeColor to prevent re-renders
     const miniMapNodeColor = useCallback((node: Node) => {
         if (node.type === 'domainNode') {
-            const data = node.data as DomainNodeData;
-            const status = data.health?.status || 'healthy';
+            const status = (node.data as DomainNodeData).health?.status;
             return status === 'healthy'
                 ? '#10b981'
                 : status === 'warning'
@@ -1218,12 +992,11 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
         return (node.data as any).coupling?.color || '#6b7280';
     }, []);
 
-    let renderEmptyState = null;
-
     const isTraceModeEmpty = currentMode === 'trace' && !functionTrace;
     const isArchitectureModeEmpty = currentMode === 'architecture' && !architectureSkeleton;
     const isCodebaseModeEmpty = currentMode === 'codebase' && !graphData;
 
+    let renderEmptyState = null;
     if (isTraceModeEmpty || isArchitectureModeEmpty || isCodebaseModeEmpty) {
         if (currentMode === 'trace') {
             renderEmptyState = (
@@ -1255,7 +1028,6 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
             );
         }
     } else if (nodes.length === 0 && !isLayouting) {
-        // CASE 1: Filtered results are empty (Only if a specific domain is selected)
         if (selectedDomain !== 'All' &&
             ((currentMode === 'architecture' && architectureSkeleton) || (currentMode === 'codebase' && graphData))) {
             renderEmptyState = (
@@ -1275,7 +1047,6 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
                 </div>
             );
         } else {
-            // CASE 2: Still Processing / Calculating Layout
             renderEmptyState = (
                 <div className="flex items-center justify-center w-full h-full">
                     <div className="text-center">
@@ -1286,39 +1057,6 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
             );
         }
     }
-
-    if (renderEmptyState) {
-        return (
-            <div
-                className={`w-full h-full relative flex flex-col graph-wrapper ${zoomClass} ${hasActiveHighlight ? 'has-highlight' : ''}`}
-                style={{
-                    width: '100%',
-                    height: '100%',
-                    position: 'relative',
-                    display: 'flex',
-                    flexDirection: 'column',
-                }}
-            >
-                {/* View Mode Bar */}
-                <ViewModeBar
-                    currentMode={currentMode}
-                    onModeChange={handleModeChange}
-                    maxDepth={maxDepth}
-                    onDepthChange={setMaxDepth}
-                    availableDomains={availableDomains}
-                    selectedDomain={selectedDomain}
-                    onSelectDomain={setSelectedDomain}
-                    sortBy={sortBy}
-                    onSortChange={setSortBy as any}
-                />
-
-                <div style={{ flex: 1, position: 'relative' }}>
-                    {renderEmptyState}
-                </div>
-            </div>
-        );
-    }
-
 
     return (
         <div
@@ -1345,74 +1083,76 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
             />
 
             <div style={{ flex: 1, position: 'relative' }}>
-                <ReactFlow
-                    nodes={interactiveNodes}
-                    edges={interactiveEdges}
-                    onNodesChange={onNodesChange}
-                    onEdgesChange={onEdgesChange}
-                    onNodeClick={handleNodeClick}
-                    onNodeDoubleClick={handleNodeDoubleClick}
-                    onNodeMouseEnter={handleNodeMouseEnter}
-                    onNodeMouseLeave={handleNodeMouseLeave}
-                    onNodeContextMenu={handleNodeContextMenu}
-                    onPaneContextMenu={(e) => { e.preventDefault(); setLockedNodeId(null); }}
-                    nodeTypes={nodeTypes}
-                    minZoom={0.1}
-                    maxZoom={2}
-                    nodesDraggable={false}
-                    nodesConnectable={false}
-                    elementsSelectable={true}
-                    onlyRenderVisibleElements={true}
-                    elevateEdgesOnSelect={false}
-                    zoomOnDoubleClick={false}
-                    defaultEdgeOptions={{
-                        type: 'default',
-                    }}
-                    onMove={onMove}
-                >
-                    <Background gap={20} />
-                    <Controls />
-                    <MiniMap
-                        nodeColor={miniMapNodeColor}
-                        maskColor="rgba(0, 0, 0, 0.5)"
-                        pannable={false}
-                        zoomable={false}
-                    />
+                {renderEmptyState ? renderEmptyState : (
+                    <ReactFlow
+                        nodes={interactiveNodes}
+                        edges={interactiveEdges}
+                        onNodesChange={onNodesChange}
+                        onEdgesChange={onEdgesChange}
+                        onNodeClick={handleNodeClick}
+                        onNodeDoubleClick={handleNodeDoubleClick}
+                        onNodeMouseEnter={handleNodeMouseEnter}
+                        onNodeMouseLeave={handleNodeMouseLeave}
+                        onNodeContextMenu={handleNodeContextMenu}
+                        onPaneContextMenu={(e) => { e.preventDefault(); setLockedNodeId(null); }}
+                        nodeTypes={nodeTypes}
+                        minZoom={0.1}
+                        maxZoom={2}
+                        nodesDraggable={false}
+                        nodesConnectable={false}
+                        elementsSelectable={true}
+                        onlyRenderVisibleElements={true}
+                        elevateEdgesOnSelect={false}
+                        zoomOnDoubleClick={false}
+                        defaultEdgeOptions={{
+                            type: 'default',
+                        }}
+                        onMove={onMove}
+                    >
+                        <Background gap={20} />
+                        <Controls />
+                        <MiniMap
+                            nodeColor={miniMapNodeColor}
+                            maskColor="rgba(0, 0, 0, 0.5)"
+                            pannable={false}
+                            zoomable={false}
+                        />
 
-                    {/* Legend */}
-                    <div style={{
-                        position: 'absolute',
-                        bottom: '20px',
-                        left: '20px',
-                        backgroundColor: 'var(--vscode-editor-background)',
-                        border: '1px solid var(--vscode-widget-border)',
-                        padding: '12px',
-                        borderRadius: '8px',
-                        fontSize: '11px',
-                        boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-                        zIndex: 10,
-                        opacity: 0.9,
-                        color: 'var(--vscode-editor-foreground)',
-                        pointerEvents: 'none' // Let clicks pass through if needed, but usually legend is just visual
-                    }}>
-                        <div style={{ fontWeight: 600, marginBottom: '8px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Relationships</div>
+                        {/* Legend */}
+                        <div style={{
+                            position: 'absolute',
+                            bottom: '20px',
+                            left: '20px',
+                            backgroundColor: 'var(--vscode-editor-background)',
+                            border: '1px solid var(--vscode-widget-border)',
+                            padding: '12px',
+                            borderRadius: '8px',
+                            fontSize: '11px',
+                            boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
+                            zIndex: 10,
+                            opacity: 0.9,
+                            color: 'var(--vscode-editor-foreground)',
+                            pointerEvents: 'none'
+                        }}>
+                            <div style={{ fontWeight: 600, marginBottom: '8px', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Relationships</div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                            <div style={{ width: '24px', height: '2px', backgroundColor: '#6b7280', borderTop: '2px dashed #6b7280' }}></div>
-                            <span>Hierarchy (Contains)</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                <div style={{ width: '24px', height: '2px', backgroundColor: '#6b7280', borderTop: '2px dashed #6b7280' }}></div>
+                                <span>Hierarchy (Contains)</span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                <div style={{ width: '24px', height: '3px', backgroundColor: '#38bdf8' }}></div>
+                                <span>Calls / Dependencies</span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ width: '24px', height: '3px', backgroundColor: '#f59e0b', boxShadow: '0 0 4px #f59e0b' }}></div>
+                                <span>Active Path / Selection</span>
+                            </div>
                         </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                            <div style={{ width: '24px', height: '3px', backgroundColor: '#38bdf8' }}></div>
-                            <span>Calls / Dependencies</span>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{ width: '24px', height: '3px', backgroundColor: '#f59e0b', boxShadow: '0 0 4px #f59e0b' }}></div>
-                            <span>Active Path / Selection</span>
-                        </div>
-                    </div>
-                </ReactFlow>
+                    </ReactFlow>
+                )}
             </div>
 
             {/* Layout Loading State */}
@@ -1527,12 +1267,11 @@ const GraphCanvas = memo(({ graphData, vscode, onNodeClick, searchQuery }: Graph
                     filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.5));
                     transition: filter 0.2s ease;
                 }
-                
             `}</style>
         </div>
     );
-});
+};
 
 GraphCanvas.displayName = 'GraphCanvas';
 
-export default GraphCanvas;
+export default memo(GraphCanvas);

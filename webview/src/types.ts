@@ -55,6 +55,7 @@ export type ExtensionMessage =
     | { type: 'function-trace'; data: FunctionTrace }
     | { type: 'theme-changed'; theme: 'light' | 'dark' }
     | { type: 'filter-by-directory'; path: string }
+    | { type: 'cache-invalidate' }
     | { type: 'error'; message: string };
 
 export type WebviewMessage =
@@ -89,7 +90,7 @@ export interface FileNodeData extends Record<string, unknown> {
     isDimmed?: boolean;
     isActive?: boolean;
     isClickable?: boolean;
-    onToggleCollapse?: () => void;
+    onToggleCollapse?: (nodeId: string) => void;
 }
 
 export interface FolderNodeData extends Record<string, unknown> {
@@ -102,7 +103,7 @@ export interface FolderNodeData extends Record<string, unknown> {
     collapsed: boolean;
     domainName?: string;
     depth: number;
-    onToggleCollapse: () => void;
+    onToggleCollapse: (nodeId: string) => void;
 }
 
 export interface SymbolNodeData extends Record<string, unknown> {
@@ -135,7 +136,7 @@ export interface DomainNodeData extends Record<string, unknown> {
     domain: string;
     health: DomainHealth;
     collapsed: boolean;
-    onToggleCollapse?: () => void;
+    onToggleCollapse?: (nodeId: string) => void;
 }
 
 // Updated graph data with domains
