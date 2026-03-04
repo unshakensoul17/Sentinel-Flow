@@ -435,7 +435,7 @@ Keep responses brief and focused - under 30 words when possible.`;
 
                 let detailedExplanation = "Bedrock request failed.";
                 if (errorMsg.includes("Operation not allowed") || errorMsg.includes("AccessDenied")) {
-                    detailedExplanation = `**Model Access Required!**\n\nAWS rejected the request with "Operation not allowed". This means you have not enabled the selected model on your AWS account.\n\n**To fix this:**\n1. Log into your AWS Console\n2. Go to **Amazon Bedrock** -> **Model access** (bottom left)\n3. Click **Enable specific models**\n4. Check the box for your model (e.g. Amazon Nova 2 Lite)\n5. Click **Next** & **Submit**\n\n*(It takes 1-2 minutes for access to activate).*`;
+                    detailedExplanation = `**Model Access Required!**\n\nAWS rejected the request with "Operation not allowed". AWS has recently updated their Bedrock permission flow and the old "Model Access" page is retired.\n\n**To fix this for Anthropic models:**\n1. In the AWS console left menu, click **Model catalog**.\n2. Click on the model you want to use (e.g. Claude 3 Haiku).\n3. Click **Request Model Access** or attempt to open it in the **Playground**.\n4. You will likely be prompted to submit "Use case details" or accept AWS Marketplace permissions for Anthropic.\n5. Complete the prompt. Once you can successfully prompt the model in the AWS Playground, it will instantly start working here!\n\n*(It takes 1-2 minutes for access to activate).*`;
                 }
 
                 return {
