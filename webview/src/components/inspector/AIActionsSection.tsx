@@ -146,7 +146,7 @@ const AIActionsSection = memo(({ vscode }: AIActionsSectionProps) => {
                                 <div className="ai-result-header">
                                     <div className="ai-result-meta">
                                         <span className="ai-model-badge">
-                                            {aiResult.model === 'vertex' ? '🧠 Vertex' : '⚡ Groq'}
+                                            {aiResult.model === 'gemini' ? '💡 Gemini' : aiResult.model === 'bedrock' ? '☁ Bedrock' : '⚡ Groq'}
                                         </span>
                                         {aiResult.cached && (
                                             <span className="ai-cached-badge">📦 Cached</span>

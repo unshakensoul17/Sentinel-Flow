@@ -62,7 +62,7 @@ export interface RiskData {
 export interface AIResult {
     action: string;
     content: string;
-    model: 'groq' | 'vertex';
+    model: 'groq' | 'gemini' | 'bedrock' | string;
     cached: boolean;
     loading: boolean;
     error?: string;
