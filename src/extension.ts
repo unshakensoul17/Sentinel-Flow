@@ -561,12 +561,11 @@ async function refineGraph() {
     }
 
     const config = vscode.workspace.getConfiguration('sentinelFlow');
-    const vertexProject = config.get<string>('vertexProject');
     const geminiApiKey = config.get<string>('geminiApiKey');
 
-    if (!vertexProject && !geminiApiKey) {
+    if (!geminiApiKey) {
         const result = await vscode.window.showErrorMessage(
-            'Neither Vertex AI nor Gemini API Key is configured. Please set one up first.',
+            'Gemini API Key is not configured. Please set one up first.',
             'Configure AI'
         );
         if (result === 'Configure AI') {
@@ -672,7 +671,7 @@ async function updateWorkerConfig() {
     if (!workerManager) return;
 
     const config = vscode.workspace.getConfiguration('sentinelFlow');
-    const vertexProject = config.get<string>('vertexProject');
+
     const groqApiKey = config.get<string>('groqApiKey');
     const geminiApiKey = config.get<string>('geminiApiKey');
     const awsRegion = config.get<string>('awsRegion');
@@ -683,7 +682,6 @@ async function updateWorkerConfig() {
 
     try {
         await workerManager.configureAI({
-            vertexProject,
             groqApiKey,
             geminiApiKey,
             awsRegion,
@@ -719,26 +717,12 @@ async function configureAI() {
         vscode.window.showInformationMessage('Groq API Key updated successfully.');
     }
 
-    // 2. Get Vertex Project ID
-    const currentVertexProject = config.get<string>('vertexProject') || '';
-    const vertexProject = await vscode.window.showInputBox({
-        title: 'Configure Vertex AI Project',
-        prompt: 'Enter your Google Cloud Project ID (Gemini 1.5 analysis)',
-        value: currentVertexProject,
-        placeHolder: 'my-project-id',
-        ignoreFocusOut: true
-    });
 
-    if (vertexProject !== undefined) {
-        await config.update('vertexProject', vertexProject, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage('Vertex Project ID updated successfully.');
-    }
-
-    // 3. Get Gemini API Key
+    // 2. Get Gemini API Key
     const currentGeminiKey = config.get<string>('geminiApiKey') || '';
     const geminiKey = await vscode.window.showInputBox({
         title: 'Configure Gemini API Key',
-        prompt: 'Enter your Google Gemini API Key (Alternative to Vertex AI)',
+        prompt: 'Enter your Google Gemini API Key (Gemini 1.5 analysis)',
         value: currentGeminiKey,
         password: true,
         placeHolder: 'AIza...',

@@ -1,6 +1,6 @@
 // Purpose: Intent classification for AI query routing
 // Determines whether a query should use the fast reflex path (Groq/Llama)
-// or the thorough strategic path (Vertex AI/Gemini)
+// or the thorough strategic path (Gemini)
 
 /**
  * Intent types for routing decisions
@@ -34,7 +34,7 @@ interface IntentPattern {
  * - Quick lookups: "Describe", "Show me", "What is"
  * - Target: <300ms response time
  * 
- * Strategic Path (Vertex AI/Gemini 1.5 Pro):
+ * Strategic Path (Gemini 1.5 Pro):
  * - Complex analysis: "Audit for security", "Refactor this dependency graph"
  * - Multi-file reasoning: "Analyze dependencies", "Find all usages"
  * - Deep code review tasks

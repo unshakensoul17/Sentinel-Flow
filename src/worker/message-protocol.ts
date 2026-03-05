@@ -87,7 +87,7 @@ export type WorkerRequest =
         type: 'configure-ai';
         id: string;
         config: {
-            vertexProject?: string;
+
             groqApiKey?: string;
             geminiApiKey?: string;
             awsRegion?: string;

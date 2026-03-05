@@ -2,6 +2,7 @@
   "name": "sentinel-flow-extension",
   "displayName": "Sentinel Flow",
   "description": "Advanced codebase intelligence and visualization",
+  "icon": "resources/sentinel_flow_icon.png",
   "version": "0.1.0",
   "publisher": "innovators-of-ai",
   "engines": {
@@ -71,10 +72,6 @@
       "type": "object",
       "title": "Sentinel Flow",
       "properties": {
-        "sentinelFlow.vertexProject": {
-          "type": "string",
-          "description": "Google Cloud Project ID for Vertex AI (Gemini 1.5 Pro). Required for strategic analysis."
-        },
         "sentinelFlow.groqApiKey": {
           "type": "string",
           "description": "Groq API Key (Llama 3.1). Required for reflex/fast analysis."
@@ -159,7 +156,6 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "devDependencies": {
-    "@google-cloud/vertexai": "^1.10.0",
     "@google/generative-ai": "^0.24.1",
     "@types/node": "^20.11.5",
     "@types/sql.js": "^1.4.9",

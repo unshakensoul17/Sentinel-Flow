@@ -4,12 +4,11 @@
 
 import { IntentRouter, ClassifiedIntent } from './intent-router';
 import { GroqClient, createGroqClient } from './groq-client';
-import { VertexClient, createVertexClient } from './vertex-client';
+
 import { GeminiClient, createGeminiClient } from './gemini-client';
 import { BedrockClient, createBedrockClient } from './bedrock-client';
 import { CodeIndexDatabase } from '../db/database';
 import { SymbolContext } from '../db/schema';
-import { DomainClassification, DomainType } from '../domain/classifier';
 import * as fs from 'fs';
 
 /**
@@ -66,7 +65,7 @@ export interface AIQueryOptions {
  * 
  * Intent Routing:
  * - Reflex Path (Groq/Llama 3.1): Fast <300ms responses for simple queries
- * - Strategic Path (Vertex AI/Gemini 1.5 Pro): Deep analysis for complex queries
+ * - Strategic Path (Gemini 1.5 Pro): Deep analysis for complex queries
  * 
  * Context Assembly (cAST):
  * - Fetches target symbol + 1st-degree neighbors from SQLite
@@ -79,7 +78,7 @@ export interface AIQueryOptions {
 export class AIOrchestrator {
     private intentRouter: IntentRouter;
     private groqClient: GroqClient | null;
-    private vertexClient: VertexClient | null;
+
     private geminiClient: GeminiClient | null;
     private bedrockClient: BedrockClient | null;
 
@@ -95,7 +94,7 @@ export class AIOrchestrator {
 
         // Initialize AI clients (will be null if API keys not available)
         this.groqClient = createGroqClient();
-        this.vertexClient = createVertexClient();
+
         this.geminiClient = createGeminiClient();
         // Bedrock is initialized lazily when config is provided
         this.bedrockClient = createBedrockClient();
@@ -446,8 +445,8 @@ Keep responses brief and focused - under 30 words when possible.`;
             }
         }
 
-        // --- Gemini / Vertex path (default) ---
-        const client = this.geminiClient || this.vertexClient;
+        // --- Gemini path (default) ---
+        const client = this.geminiClient;
 
         if (!client) {
             throw new Error('AI Strategic client not configured. Required for default routing.');
@@ -470,7 +469,7 @@ Keep responses brief and focused - under 30 words when possible.`;
                 neighborCount: context?.neighbors.length,
             };
         } catch (error) {
-            console.warn(`[Orchestrator] Strategic AI (${client === this.geminiClient ? 'Gemini' : 'Vertex'}) failed. Error: ${(error as Error).message}. Falling back to Reflex path (Groq).`);
+            console.warn(`[Orchestrator] Strategic AI (Gemini) failed. Error: ${(error as Error).message}. Falling back to Reflex path (Groq).`);
 
             const fallbackResponse = await this.executeReflexPath(prompt, intent, context);
 
@@ -504,13 +503,6 @@ Keep responses brief and focused - under 30 words when possible.`;
     }
 
     /**
-     * Check if Vertex AI client is available
-     */
-    hasVertexClient(): boolean {
-        return this.vertexClient !== null;
-    }
-
-    /**
      * Classify symbol domain using AI
      * Uses Groq for fast classification or falls back to heuristics
      */
@@ -525,15 +517,10 @@ Keep responses brief and focused - under 30 words when possible.`;
     /**
      * Update AI client configuration
      */
-    updateConfig(config: { vertexProject?: string; groqApiKey?: string; geminiApiKey?: string; awsRegion?: string; bedrockModelId?: string; awsAccessKeyId?: string; awsSecretAccessKey?: string; aiProvider?: 'gemini' | 'bedrock' }) {
+    updateConfig(config: { groqApiKey?: string; geminiApiKey?: string; awsRegion?: string; bedrockModelId?: string; awsAccessKeyId?: string; awsSecretAccessKey?: string; aiProvider?: 'gemini' | 'bedrock' }) {
         if (config.groqApiKey) {
             console.log('[Orchestrator] Updating Groq client with new API key');
             this.groqClient = createGroqClient({ apiKey: config.groqApiKey });
-        }
-
-        if (config.vertexProject) {
-            console.log('[Orchestrator] Updating Vertex AI client with new project ID');
-            this.vertexClient = createVertexClient({ projectId: config.vertexProject });
         }
 
         if (config.geminiApiKey) {

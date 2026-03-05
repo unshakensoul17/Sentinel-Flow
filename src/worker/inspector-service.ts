@@ -518,7 +518,7 @@ export class InspectorService {
             return {
                 action,
                 content: result.content,
-                model: result.model === 'llama-3.1-8b-instant' ? 'groq' : result.model.includes('gemini') ? 'vertex' : result.model,
+                model: result.model === 'llama-3.1-8b-instant' ? 'groq' : result.model.includes('gemini') ? 'gemini' : result.model,
                 cached: false,
                 loading: false,
                 patch

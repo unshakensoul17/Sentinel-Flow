@@ -460,7 +460,7 @@ export class WorkerManager {
     /**
      * Configure AI settings
      */
-    async configureAI(config: { vertexProject?: string; groqApiKey?: string; geminiApiKey?: string; awsRegion?: string; bedrockModelId?: string; awsAccessKeyId?: string; awsSecretAccessKey?: string; aiProvider?: 'gemini' | 'bedrock' }): Promise<void> {
+    async configureAI(config: { groqApiKey?: string; geminiApiKey?: string; awsRegion?: string; bedrockModelId?: string; awsAccessKeyId?: string; awsSecretAccessKey?: string; aiProvider?: 'gemini' | 'bedrock' }): Promise<void> {
         const response = await this.sendRequest({
             type: 'configure-ai',
             id: this.generateId(),
