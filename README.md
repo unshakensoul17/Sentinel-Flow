@@ -16,7 +16,7 @@
 ---
 
 <!-- 🎥 QUICK DEMO VIDEO (HERO SCREEN) -->
-<video autoplay loop muted playsinline src="./resources/demo.mp4" width="100%" title="Sentinel Flow Demo"></video>
+<video autoplay loop muted playsinline src="https://github.com/unshakensoul17/SentinelFlow/raw/main/resources/demo.mp4" width="100%" title="Sentinel Flow Demo"></video>
 
 </div>
 
