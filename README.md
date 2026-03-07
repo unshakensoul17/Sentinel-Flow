@@ -15,16 +15,8 @@
 
 ---
 
-<!-- 
-  💡 IMAGE SUGGESTION: 
-  Add a hero GIF/screenshot here showing the interactive graph in action.
-  Ideal size: 1280×720px. Capture the Architecture Mode with a real project loaded,
-  the Inspector Panel open, and the AI chat responding to a query.
-  Command to record: use VS Code's built-in screen recorder or tools like LICEcap/Kap.
-  
-  Example:
-  ![Sentinel Flow Demo](./docs/assets/demo.gif)
--->
+<!-- 🎥 QUICK DEMO VIDEO (HERO SCREEN) -->
+<video autoplay loop muted playsinline src="./resources/demo.mp4" width="100%" title="Sentinel Flow Demo"></video>
 
 </div>
 
@@ -340,6 +332,12 @@ npm run build
 
 ## 📖 Usage Guide
 
+### 🎬 Full Video Walkthrough
+
+For a complete overview of Sentinel Flow, including architecture planning, AI routing, and the Inspector Panel, watch our deep-dive tutorial.
+
+[![Sentinel Flow Full Walkthrough](https://img.youtube.com/vi/9yRhPxO0Jl8/maxresdefault.jpg)](https://youtu.be/9yRhPxO0Jl8 "Watch the Sentinel Flow Full Walkthrough on YouTube")
+
 ### Commands
 
 | Command | Description |
@@ -356,20 +354,30 @@ npm run build
 #### Architecture Mode
 Renders your project as a high-level domain map. Folders become architectural domains; edges represent cross-domain dependencies. Use this when you need to orient yourself in an unfamiliar codebase or plan a cross-cutting change.
 
+<img src="./resources/screenshots/4.png" width="100%" alt="Architecture Mode">
+
 #### Codebase Mode
 Displays the full symbol graph at three depth levels — Domain → File → Symbol — with edges showing imports and function calls. Use this for detailed code navigation and tracing exact dependency chains.
 
+<img src="./resources/screenshots/1.png" width="100%" alt="Codebase Mode">
+
 #### Trace Mode
 Isolates a function's call chain and visualizes its blast radius: every symbol that would be affected by a change. Use this for debugging, impact analysis, and planning safe refactors.
+
+<img src="./resources/screenshots/3.png" width="100%" alt="Trace Mode">
 
 ### Inspector Panel
 
 Click any node to open the Inspector Panel on the right:
 
+<img align="right" src="./resources/screenshots/9.png" width="250px" alt="Inspector Panel">
+
 - **Overview** — basic metrics and file metadata
 - **Dependencies** — incoming and outgoing relationship list
 - **Risks & Health** — complexity, coupling, and fragility scores with color-coded indicators
 - **AI Actions** — generate explanations, suggest refactors, or run a security audit on the selected symbol
+
+<br clear="all" />
 
 ### CodeLens Annotations
 
@@ -389,14 +397,7 @@ async function processPayment(order: Order): Promise<Receipt> {
 
 > **Tip:** CodeLens scores update automatically after each incremental index. You don't need to reopen the file.
 
-### Inspector Panel
 
-Click any node to open the Inspector Panel on the right:
-
-- **Overview** — basic metrics and file metadata
-- **Dependencies** — incoming and outgoing relationship list
-- **Risks & Health** — complexity, coupling, and fragility scores with color-coded indicators
-- **AI Actions** — generate explanations, suggest refactors, or run a security audit on the selected symbol
 
 ### Search & Filtering
 
