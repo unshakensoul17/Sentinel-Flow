@@ -292,7 +292,7 @@ To achieve enterprise-grade performance entirely within the local VS Code enviro
 
 ### Installation
 
-**Option A — VS Code Marketplace** *(coming soon)*
+**Option A — VS Code Marketplace**
 
 Search for `Sentinel Flow` in the VS Code Extensions panel.
 
