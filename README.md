@@ -299,7 +299,7 @@ Search for `Sentinel Flow` in the VS Code Extensions panel.
 **Option B — Build from Source**
 
 ```bash
-git clone https://github.com/Aman-art1/SentinelFlow
+git clone https://github.com/unshakensoul17/Sentinel-Flow
 cd sentinel-flow-extension
 npm install
 npm run build
@@ -591,7 +591,7 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 | Channel | Link |
 |---------|------|
-| Bug Reports & Feature Requests | [GitHub Issues](https://github.com/Aman-art1/SentinelFlow/issues) |
+| Bug Reports & Feature Requests | [GitHub Issues]([https://github.com/Aman-art1/SentinelFlow](https://github.com/unshakensoul17/Sentinel-Flow/issues) |
 | Documentation | [sentinel-flow.dev](https://sentinel-flow.dev) *(coming soon)* |
 | Community Discord | [discord.gg/sentinel-flow](https://discord.gg/sentinel-flow) *(coming soon)* |
 
@@ -599,6 +599,6 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 <div align="center">
 
-**Built with ❤️ by the [Innovators of AI](https://github.com/innovators-of-ai) team**
+**Built with ❤️ by the [Unshaken Soul](https://github.com/unshakensoul17/Sentinel-Flow) team**
 
 </div>
