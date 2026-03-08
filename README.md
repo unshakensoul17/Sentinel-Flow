@@ -591,7 +591,7 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 | Channel | Link |
 |---------|------|
-| Bug Reports & Feature Requests | [GitHub Issues]([https://github.com/Aman-art1/SentinelFlow](https://github.com/unshakensoul17/Sentinel-Flow/issues) |
+| Bug Reports & Feature Requests | [GitHub Issues ] (https://github.com/unshakensoul17/Sentinel-Flow/issues) |
 | Documentation | [sentinel-flow.dev](https://sentinel-flow.dev) *(coming soon)* |
 | Community Discord | [discord.gg/sentinel-flow](https://discord.gg/sentinel-flow) *(coming soon)* |
 
